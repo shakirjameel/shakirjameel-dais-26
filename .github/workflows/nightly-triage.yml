@@ -1,0 +1,42 @@
+name: nightly-triage
+
+# The heartbeat: a scheduled run that surfaces work by itself so a human (or an
+# agentic loop) is not the one polling. The deterministic core (triage.py) needs
+# no secrets and writes its brief to the job summary. The agentic step is opt-in
+# and only runs when an ANTHROPIC_API_KEY secret is configured.
+
+on:
+  schedule:
+    - cron: "0 13 * * 1-5" # 13:00 UTC on weekdays
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 20
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Deterministic triage brief
+        run: python3 scripts/triage.py >> "$GITHUB_STEP_SUMMARY"
+
+      # --- Agentic loop (opt-in) -------------------------------------------
+      # Uncomment and set the ANTHROPIC_API_KEY repo secret to let Claude Code
+      # act on the brief: pick the next not_started feature, draft it in a
+      # worktree via the implementer subagent, and gate it via the verifier
+      # subagent. Keep a human in the PR-review loop — see docs/harness/loops.md.
+      #
+      # - name: Agentic triage (Claude Code)
+      #   uses: anthropics/claude-code-action@v1
+      #   with:
+      #     anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+      #     prompt: |
+      #       Run /triage. For the single next actionable feature, dispatch the
+      #       implementer subagent in an isolated worktree, then the verifier
+      #       subagent. Open a PR; do not mark passing except via verify-feature.

@@ -223,3 +223,7 @@ __marimo__/
 # Mission Copilot — cached external data pulls (regenerable; not source)
 data/cache/*
 !data/cache/.gitkeep
+
+# Context-harness (from prairie)
+node_modules
+docs/harness/context-dashboard.html

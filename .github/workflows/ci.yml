@@ -1,0 +1,20 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      # The harness gate is stdlib-only, so it runs before any app deps exist.
+      # `make check` = harness gate (files, features, skill, unit tests)
+      #                + repo-hygiene + triage selftest + cost-ledger selftest.
+      - name: Harness gate
+        run: make check
