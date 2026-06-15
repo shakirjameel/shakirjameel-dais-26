@@ -69,9 +69,20 @@ districts; some names repeat across states). Spatial join fixes facility→distr
 
 ### 🟡 LOW (note, don't block)
 
-**R8. Capability/capacity mostly null.** `numberDoctors`, `capacity`, `equipment` are sparse →
-we can assert facility *presence* but not reliably its *capability*. Limits "which facility to
-partner with" to presence + declared specialties.
+**R8. Structured capacity is sparse, but free-text capability is NOT.** *Corrected 2026-06-15.*
+The earlier read here conflated two different things. The **structured** fields are genuinely sparse
+(`capacity` 25%, `yearEstablished` 48%, `numberDoctors` largely null). But the **free-text** fields
+the FDR pipeline extracted are well-covered: `description` 100%, `capability` 99.7%, `procedure`
+92.5%, `equipment` 77% (summit "Where the dataset comes from" slide). So we *can* say more than
+"presence": we now treat the capability text as a **claim to verify, not ground truth** and grade it
+by corroboration against the facility's own procedure/equipment text — `mission_core/claims.py`
+(high = claimed + corroborated; medium = claimed only; unverified = the ob/gyn flag fired but the
+facility's own text doesn't claim it). On real data, of **4,658** facilities the flag marks ob/gyn
+only ~**2,000** are text-corroborated — that gap is the honesty signal, surfaced and cited, never
+hidden. *The `maternal_supply` flag itself is an extracted claim and is verified the same way.*
+*Update 2026-06-15:* this now spans **six capabilities** (maternity, ICU, NICU, emergency, oncology,
+trauma) — `claims.py` classifies each facility×capability high/medium/unverified, aggregated into
+`district_capability` and cited per facility with its **name + source_url** (`facility_claims`).
 
 **R9. Temporal staleness.** NFHS-5 is **2019–21**; facility `recency_of_page_update` is largely
 null so web-data vintage is unknown.

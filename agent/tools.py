@@ -15,10 +15,13 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from mission_core.data_access import load_districts, make_reach_fn, STAGING, CANDIDATE_STATES
+from mission_core.data_access import (load_districts, make_reach_fn, load_facility_claims,
+                                       list_states, STAGING, CANDIDATE_STATES)
 from mission_core.burden import INTERVENTION_INDICATORS
 from mission_core.chain import rank_districts as _rank, INTERVENTION_SUPPLY_COLUMN
 from mission_core.sensitivity import sweep as _sweep, COEFFICIENTS
+from mission_core.claims import CAPABILITIES, CAPABILITY_LABELS
+from mission_core.coverage_view import coverage_by_geography as _coverage, coverage_summary
 from .brief import build_brief
 
 
@@ -42,11 +45,30 @@ def _summarize(row: dict) -> dict:
         "burden_confidence": row["burden"]["confidence"],
         "gap": row["gap"]["gap"],
         "reachable_supply": row["supply"],
+        # maternal supply split into text-verified vs flag-only (claims-to-verify discipline)
+        "verified_maternal_supply": row.get("verified_supply"),
+        "maternal_claim_breakdown": row.get("claim_breakdown"),
         "drive_hours": round(row["reach"]["drive_hours"], 1),
         "distance_km": row["reach"]["distance_km"],
         "cost_total_usd": row["cost"]["total_usd"],
         "tier": row["tier"],
         "data_confidence": row["data_confidence"],
+    }
+
+
+def _cite(c: dict) -> dict:
+    """One facility's CITED claim — name, source link + the underlying text, never paraphrased."""
+    return {
+        "facility_name": c.get("name") or None,
+        "city": c.get("city") or None,
+        "source_url": c.get("source_url") or None,
+        "claim_confidence": c.get("claim_confidence"),
+        "operator": c.get("operator"),
+        "capability": c.get("capability"),
+        "claimed_capability_text": c.get("capability_evidence") or None,
+        "corroborating_procedure_text": c.get("procedure_evidence") or None,
+        "matched_claim_terms": c.get("claim_terms"),
+        "matched_corroborating_terms": c.get("corroborating_terms"),
     }
 
 
@@ -63,12 +85,13 @@ def list_interventions() -> dict:
             "interventions": out}
 
 
-def rank_districts_tool(intervention: str, team_size: int = 6, days: int = 7, top_n: int = 5) -> dict:
+def rank_districts_tool(intervention: str, team_size: int = 6, days: int = 7, top_n: int = 5,
+                        count_unverified: bool = False) -> dict:
     if intervention not in INTERVENTION_INDICATORS:
         return {"error": f"unknown intervention '{intervention}'",
                 "valid": list(INTERVENTION_INDICATORS)}
     res = _rank(intervention, _reach_fn(), team_size=team_size, days=days,
-                top_n=top_n, districts=_candidates())
+                top_n=top_n, districts=_candidates(), count_unverified=count_unverified)
     return {
         "intervention": intervention, "staging_city": STAGING["name"],
         "team_size": team_size, "days": days,
@@ -94,10 +117,15 @@ def get_district_detail(intervention: str, district: str, team_size: int = 6, da
                     "tier_rank": r["tier_rank"], "data_confidence": r["data_confidence"],
                     "burden": r["burden"],          # score + indicators_used + missing + low_confidence
                     "gap": r["gap"],
-                    "supply": {"reachable_relevant": r["supply"]},
+                    "supply": {"reachable_relevant": r["supply"],
+                               "verified_maternal": r.get("verified_supply"),
+                               "claim_breakdown": r.get("claim_breakdown")},
                     "reach": r["reach"],
                     "cost": r["cost"],               # full breakdown + assumptions_used (provenance)
                     "need_per_dollar": r["metric"],
+                    # a representative CITED facility claim (the underlying text), if any
+                    "evidence": ([_cite(c) for c in load_facility_claims(r["district"], "maternity")[:1]]
+                                 or [None])[0],
                 }
     for r in res["excluded"]:
         if r["district"].strip().lower() == key:
@@ -105,6 +133,63 @@ def get_district_detail(intervention: str, district: str, team_size: int = 6, da
                     "excluded": True, "reason": r["excluded_reason"], "burden": r["burden"]}
     return {"error": f"district '{district}' not found in candidate region",
             "hint": "call rank_districts first to see valid district names"}
+
+
+def coverage_by_geography(capability: str = "maternity", state: str = None,
+                          count_unverified: bool = False, top_n: int = 12) -> dict:
+    """Track-2's primary aggregate: TRUST-WEIGHTED coverage by district for a capability across a
+    state — ranked by desert score, distinguishing REAL care gaps from data-poor regions
+    (confirmed_coverage / unverified_claims / no_claim_desert). Use this to answer 'where are the
+    highest-risk gaps for <capability> in <state>?'. All numbers are computed; cite, don't invent."""
+    cap = {"maternal_health": "maternity"}.get(capability, capability)
+    if cap not in CAPABILITIES:
+        return {"error": f"unknown capability '{capability}'", "valid": CAPABILITIES}
+    rows = _coverage(cap, state, count_unverified, top_n=top_n)
+    if not rows:
+        return {"capability": cap, "state": state, "districts": [],
+                "note": "no coverage rows — check the state name or run the data pipeline."}
+    return {
+        "capability": cap, "capability_label": CAPABILITY_LABELS.get(cap, cap), "state": state,
+        "count_unverified": count_unverified,
+        "summary": coverage_summary(_coverage(cap, state, count_unverified)),
+        "districts": [{
+            "rank": r["rank"], "district": r["district"], "state": r["state"],
+            "gap_classification": r["gap_classification"],
+            "verified_supply": r["verified_supply"], "unverified": r["unverified"],
+            "trust_ratio": r["trust_ratio"], "burden": r["burden"],
+            "desert_score": r["desert_score"],
+        } for r in rows],
+        "note": ("supply is TRUST-WEIGHTED (corroborated claims count fully, claimed-only partly, "
+                 "flag-only nothing unless count_unverified). 'no_claim_desert' = real gap; "
+                 "'unverified_claims' = claims to verify, not confirmed coverage."),
+    }
+
+
+def get_district_facilities(district: str, capability: str = "maternity", limit: int = 8,
+                            intervention: str = None) -> dict:
+    """The underlying facility records behind a district's supply for a CAPABILITY: for each, the
+    facility NAME, a SOURCE link, its CLAIMED capability text, the corroborating procedure text (if
+    any), and a claim-confidence (high = claimed + corroborated; medium = claimed only; unverified =
+    a flag/specialty asserts it but the facility's own text doesn't). Use to CITE evidence for a
+    ranking and show which 'supply' is verified vs an unverified claim."""
+    cap = {"maternal_health": "maternity"}.get(intervention or capability, capability)
+    if cap not in CAPABILITIES:
+        return {"capability": cap, "district": district, "facilities": [],
+                "note": f"unknown capability '{cap}'. valid: {CAPABILITIES}"}
+    claims = load_facility_claims(district, cap)
+    if not claims:
+        return {"capability": cap, "district": district, "facilities": [],
+                "note": ("no facility even claims this capability here — a candidate care desert "
+                         "(or the facility-text table isn't loaded).")}
+    counts = {k: sum(1 for c in claims if c["claim_confidence"] == k)
+              for k in ("high", "medium", "unverified")}
+    return {
+        "capability": cap, "district": district, "counts": counts,
+        "verified_supply": counts["high"] + counts["medium"],
+        "facilities": [_cite(c) for c in claims[:limit]],
+        "note": ("capability/procedure are FDR-extracted CLAIMS to verify, not ground truth. "
+                 "Cite the facility name + source + text; never present an unverified claim as fact."),
+    }
 
 
 def sensitivity_analysis(intervention: str, coefficient: str = "surgeon_day_value_usd",
@@ -134,6 +219,7 @@ def generate_brief(intervention: str, district: str, team_size: int = 6, days: i
 # ---------------------------------------------------------------- OpenAI tool schemas + dispatch
 _INTERVENTION_ENUM = list(INTERVENTION_INDICATORS)
 _COEFFICIENT_ENUM = list(COEFFICIENTS)
+_CAPABILITY_ENUM = list(CAPABILITIES)
 
 TOOLS = [
     {"type": "function", "function": {
@@ -142,6 +228,21 @@ TOOLS = [
                        "staging city, and the candidate region. Call this first if unsure which "
                        "intervention name to use.",
         "parameters": {"type": "object", "properties": {}, "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "coverage_by_geography",
+        "description": "PRIMARY tool. Trust-weighted facility COVERAGE by district for a capability "
+                       "(maternity/icu/nicu/emergency/oncology/trauma) across a state — ranked by "
+                       "desert score, classifying each district as confirmed_coverage / "
+                       "unverified_claims / no_claim_desert. Use for 'where are the highest-risk "
+                       "gaps for <capability> in <state>?' and to tell real gaps from data-poor regions.",
+        "parameters": {"type": "object", "properties": {
+            "capability": {"type": "string", "enum": _CAPABILITY_ENUM,
+                           "description": "Which capability (default maternity)."},
+            "state": {"type": "string", "description": "State/UT name, e.g. 'Bihar'. Omit for all-India."},
+            "count_unverified": {"type": "boolean",
+                                 "description": "Count flag-only/unverified claims as (discounted) supply? Default false."},
+            "top_n": {"type": "integer", "description": "How many districts to return (default 12)."}},
+            "required": ["capability"], "additionalProperties": False}}},
     {"type": "function", "function": {
         "name": "rank_districts",
         "description": "Rank candidate districts by need-addressed-per-dollar for an intervention, "
@@ -165,6 +266,19 @@ TOOLS = [
             "district": {"type": "string", "description": "District name as shown in rank_districts."},
             "team_size": {"type": "integer"}, "days": {"type": "integer"}},
             "required": ["intervention", "district"], "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "get_district_facilities",
+        "description": "The underlying facility RECORDS behind a district's supply for a capability: "
+                       "each facility's NAME, a SOURCE link, its CLAIMED capability text + the "
+                       "corroborating procedure text + a claim-confidence (high/medium/unverified). "
+                       "Call this to CITE the facility evidence for a ranking, or when asked 'can "
+                       "these facilities actually do it?' — capability is a CLAIM to verify.",
+        "parameters": {"type": "object", "properties": {
+            "district": {"type": "string", "description": "District name as shown in coverage_by_geography."},
+            "capability": {"type": "string", "enum": _CAPABILITY_ENUM,
+                           "description": "Which capability (default maternity)."},
+            "limit": {"type": "integer", "description": "Max facilities to cite (default 8)."}},
+            "required": ["district"], "additionalProperties": False}}},
     {"type": "function", "function": {
         "name": "sensitivity_analysis",
         "description": "Test whether the #1 confirmed pick is robust to a cost assumption or flips. "
@@ -191,8 +305,10 @@ TOOLS = [
 
 _DISPATCH = {
     "list_interventions": list_interventions,
+    "coverage_by_geography": coverage_by_geography,
     "rank_districts": rank_districts_tool,
     "get_district_detail": get_district_detail,
+    "get_district_facilities": get_district_facilities,
     "sensitivity_analysis": sensitivity_analysis,
     "generate_brief": generate_brief,
 }

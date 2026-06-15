@@ -23,6 +23,30 @@ def build_brief(detail: dict, candidate_gaps: list[dict], intervention: str,
     b, gap, cost, reach = detail["burden"], detail["gap"], detail["cost"], detail["reach"]
     bd, used = cost["breakdown"], cost["assumptions_used"]
 
+    # Facility EVIDENCE — cite the underlying facility text (the summit "cite the text" requirement).
+    supply = detail.get("supply", {})
+    ev = detail.get("evidence")
+    verified = supply.get("verified_maternal")
+    if ev and ev.get("claimed_capability_text"):
+        conf = ev.get("claim_confidence", "?")
+        cap = ev["claimed_capability_text"]
+        corr = ev.get("corroborating_procedure_text")
+        name = ev.get("facility_name") or "a resolved facility"
+        src = ev.get("source_url")
+        evidence_block = (f"FACILITY EVIDENCE ({verified} text-verified of "
+                          f"{supply.get('reachable_relevant', '?')} flagged)\n"
+                          f"  {name} [{conf}] claimed: \"{cap}\"")
+        evidence_block += f"\n  corroborated by: \"{corr}\"" if corr else \
+            "\n  (claim NOT corroborated by procedure/equipment text — facility's own say-so)"
+        if src:
+            evidence_block += f"\n  source: {src}"
+    elif supply.get("reachable_relevant"):
+        evidence_block = (f"FACILITY EVIDENCE\n  {supply.get('reachable_relevant')} facility(ies) carry the "
+                          f"ob/gyn flag but NONE is corroborated by capability/procedure text — "
+                          f"supply here is an UNVERIFIED claim; verify before acting.")
+    else:
+        evidence_block = "FACILITY EVIDENCE\n  no maternal facility resolved here (supply desert or data gap)."
+
     missing = b.get("missing_indicators") or []
     lowconf = b.get("low_confidence_indicators") or []
     caveats = []
@@ -32,6 +56,8 @@ def build_brief(detail: dict, candidate_gaps: list[dict], intervention: str,
         caveats.append(f"low-confidence indicators: {', '.join(lowconf)}")
     caveats.append("road reach is an estimate (ORS where routable, else straight-line ×1.3)")
     caveats.append("cost coefficients are named assumptions, adjustable (see sensitivity)")
+    caveats.append("facility capability is an FDR-extracted CLAIM; we grade it against the facility's "
+                   "own procedure/equipment text but have not field-verified it")
 
     cand = "\n".join(
         f"- {c['district']}, {c['state']} — burden {c['burden_score']}, "
@@ -48,6 +74,7 @@ BURDEN (NFHS-5)
   composite score {_na(b['score'])} ({b['confidence']}), {b['indicators_used']}/{b['indicators_total']} indicators used
 COVERAGE GAP
   {_na(gap['gap'])}  (reachable relevant supply: {detail['supply']['reachable_relevant']}; supply adequacy {_na(gap.get('supply_adequacy'))})
+{evidence_block}
 REACHABILITY (from {staging_city})
   {_na(reach['distance_km'])} km / {round(reach['drive_hours'],1)} h (estimated road travel)
 MISSION COST  ${cost['total_usd']:,.0f}
