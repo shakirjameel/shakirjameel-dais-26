@@ -30,12 +30,28 @@ import re
 from pathlib import Path
 
 from data.external.district_polygons import fetch_india_districts, build_index, assign_district
+from mission_core.claims import classify_claim, CAPABILITIES
 
 CACHE = Path(__file__).resolve().parent / "cache"
-FAC_CSV = CACHE / "facilities_geo.csv"
+# Prefer the free-text extract (facilities_text.csv, from data/02_facility_text_ingest.py) so we can
+# classify + CITE per-facility claims; fall back to the 5-column geo extract if text isn't pulled yet.
+FAC_TEXT_CSV = CACHE / "facilities_text.csv"
+FAC_GEO_CSV = CACHE / "facilities_geo.csv"
 NFHS_CSV = CACHE / "nfhs5_districts.csv"
 OUT_CSV = CACHE / "district_base.csv"
 UNMATCHED_CSV = CACHE / "unmatched_districts.csv"
+FACILITY_CLAIMS_CSV = CACHE / "facility_claims.csv"        # long: one row per resolved facility×capability
+DISTRICT_CAPABILITY_CSV = CACHE / "district_capability.csv"  # long: one row per district×capability
+_TEXT_COLS = ("specialties", "description", "capability", "procedure", "equipment")
+_PROV_COLS = ("name", "city", "pincode", "source_urls")     # provenance (citations) — may be absent in legacy CSV
+
+
+def _first_url(source_urls: str) -> str:
+    """First http(s) URL from the source_urls field (a JSON-array string) — the citation link."""
+    if not source_urls:
+        return ""
+    m = re.search(r"https?://[^\s\"',\]]+", source_urls)
+    return m.group(0) if m else ""
 
 
 # Curated district-name aliases: normalized POLYGON name -> normalized NFHS-5 name.
@@ -84,14 +100,23 @@ def normalize_name(s: str) -> str:
 
 
 # --------------------------------------------------------------------------- load
-def load_facilities() -> list[dict]:
-    with FAC_CSV.open() as f:
+def load_facilities() -> tuple[list[dict], bool]:
+    """Returns (rows, has_text). Uses facilities_text.csv when present (carries the free-text claim
+    columns); else the legacy 5-column facilities_geo.csv (no text -> claims can't be corroborated)."""
+    has_text = FAC_TEXT_CSV.exists()
+    src = FAC_TEXT_CSV if has_text else FAC_GEO_CSV
+    with src.open() as f:
         rows = list(csv.DictReader(f))
     for r in rows:
         r["latitude"] = float(r["latitude"])
         r["longitude"] = float(r["longitude"])
         r["maternal_supply"] = int(r["maternal_supply"])
-    return rows
+        for c in _TEXT_COLS + _PROV_COLS:
+            r.setdefault(c, "")
+    note = "with free-text claims" if has_text else \
+        "NO text — run data/02_facility_text_ingest.py to enable claim verification"
+    print(f"facilities source: {src.name} ({note})")
+    return rows, has_text
 
 
 def load_nfhs_districts() -> list[dict]:
@@ -99,12 +124,20 @@ def load_nfhs_districts() -> list[dict]:
         return list(csv.DictReader(f))
 
 
-def _base_row(nd: dict, facilities: int, maternal: int, public: int, private: int) -> dict:
-    """District base row: identity + supply columns, then ALL NFHS indicator columns passed
-    through verbatim (so the burden layer can use any indicator without re-plumbing)."""
+def _base_row(nd: dict, agg: dict) -> dict:
+    """District base row: identity + supply columns + maternal-CLAIM aggregates, then ALL NFHS
+    indicator columns passed through verbatim (so the burden layer can use any without re-plumbing).
+
+    maternal_supply_facilities = facilities the (noisy) flag marks ob/gyn. The claim columns split
+    that into text-corroborated (high/medium) vs flag-only (unverified) — the honesty signal."""
+    m = (agg.get("caps") or {}).get("maternity", {})
+    hi, md, un = m.get("high", 0), m.get("medium", 0), m.get("unverified", 0)
     row = {"nfhs_district": nd["district_name"], "state_ut": nd["state_ut"],
-           "facilities": facilities, "maternal_supply_facilities": maternal,
-           "public": public, "private": private}
+           "facilities": agg.get("facilities", 0),
+           "maternal_supply_facilities": agg.get("maternal", 0),
+           "public": agg.get("public", 0), "private": agg.get("private", 0),
+           "maternal_claim_high": hi, "maternal_claim_medium": md,
+           "maternal_claim_unverified": un, "maternal_verified_supply": hi + md}
     for k, v in nd.items():
         if k not in ("district_name", "state_ut"):
             row[k] = v
@@ -113,7 +146,7 @@ def _base_row(nd: dict, facilities: int, maternal: int, public: int, private: in
 
 # --------------------------------------------------------------------------- resolve
 def resolve(force_fetch: bool = False) -> dict:
-    facilities = load_facilities()
+    facilities, has_text = load_facilities()
     nfhs = load_nfhs_districts()
     print(f"loaded {len(facilities)} facilities, {len(nfhs)} NFHS-5 districts")
 
@@ -121,9 +154,14 @@ def resolve(force_fetch: bool = False) -> dict:
     engine = index.get("engine")
     print(f"polygon index ready (engine={engine})")
 
-    # 4. point-in-polygon each facility
+    # 4. point-in-polygon each facility; classify its claim for EVERY capability; aggregate per
+    #    polygon district × capability.
+    def _new_caps():
+        return {c: {"high": 0, "medium": 0, "unverified": 0} for c in CAPABILITIES}
+
     resolved, unresolved = 0, 0
     supply_by_poly: dict[str, dict] = {}
+    facilities_resolved: list[dict] = []   # long: per facility×capability rows (stamped w/ NFHS later)
     for fac in facilities:
         hit = assign_district(fac["latitude"], fac["longitude"], index)
         if not hit or not hit.get("district"):
@@ -132,7 +170,8 @@ def resolve(force_fetch: bool = False) -> dict:
         resolved += 1
         key = normalize_name(hit["district"])
         agg = supply_by_poly.setdefault(key, {"raw_name": hit["district"], "facilities": 0,
-                                              "maternal": 0, "public": 0, "private": 0})
+                                              "maternal": 0, "public": 0, "private": 0,
+                                              "caps": _new_caps()})
         agg["facilities"] += 1
         agg["maternal"] += fac["maternal_supply"]
         if fac["operator"] == "public":
@@ -140,8 +179,30 @@ def resolve(force_fetch: bool = False) -> dict:
         elif fac["operator"] == "private":
             agg["private"] += 1
 
+        prov = {"name": fac.get("name", "") or "", "city": fac.get("city", "") or "",
+                "pincode": fac.get("pincode", "") or "", "source_url": _first_url(fac.get("source_urls", "")),
+                "operator": fac.get("operator", "") or "", "unique_id": fac.get("unique_id", "")}
+        for cap in CAPABILITIES:
+            claim = classify_claim(fac, cap)
+            conf = claim["confidence"]
+            if conf in ("high", "medium", "unverified"):
+                agg["caps"][cap][conf] += 1
+                facilities_resolved.append({
+                    **prov, "poly_key": key, "capability": cap, "claim_confidence": conf,
+                    "claim_terms": "; ".join(claim["claim_terms"]),
+                    "corroborating_terms": "; ".join(claim["corroborating_terms"]),
+                    "capability_evidence": claim["capability_evidence"] or "",
+                    "procedure_evidence": claim["procedure_evidence"] or "",
+                })
+
     print(f"point-in-polygon: {resolved} resolved, {unresolved} unresolved "
           f"({resolved/len(facilities):.1%} coverage)")
+    if has_text:
+        for cap in CAPABILITIES:
+            n = sum(1 for f in facilities_resolved if f["capability"] == cap)
+            hi = sum(1 for f in facilities_resolved if f["capability"] == cap and f["claim_confidence"] == "high")
+            md = sum(1 for f in facilities_resolved if f["capability"] == cap and f["claim_confidence"] == "medium")
+            print(f"  {cap:10} graded {n:5} (high {hi}, medium {md}) — verified = high+medium")
 
     # 5. reconcile polygon names <-> NFHS names (on normalized key)
     nfhs_by_key = {}
@@ -151,6 +212,7 @@ def resolve(force_fetch: bool = False) -> dict:
     matched, aliased, unmatched_polys = 0, 0, []
     rows_out = []
     nfhs_matched_keys = set()
+    poly_key_to_nd: dict[str, dict] = {}          # polygon key -> reconciled NFHS row (for stamping facilities)
     nfhs_norm_keys = list(nfhs_by_key)
     for key, agg in supply_by_poly.items():
         nd = nfhs_by_key.get(key)
@@ -161,8 +223,8 @@ def resolve(force_fetch: bool = False) -> dict:
         if nd:
             matched += 1
             nfhs_matched_keys.add(normalize_name(nd["district_name"]))
-            rows_out.append(_base_row(nd, agg["facilities"], agg["maternal"],
-                                      agg["public"], agg["private"]))
+            poly_key_to_nd[key] = nd
+            rows_out.append(_base_row(nd, agg))
         else:
             # Assist (don't auto-apply) the human: best fuzzy candidate + a reason.
             sugg = difflib.get_close_matches(key, nfhs_norm_keys, n=1, cutoff=0.0)
@@ -174,7 +236,49 @@ def resolve(force_fetch: bool = False) -> dict:
     # NFHS districts with NO facilities resolved to them = possible deserts OR data gaps (R2).
     nfhs_with_no_supply = [d for d in nfhs if normalize_name(d["district_name"]) not in nfhs_matched_keys]
     for d in nfhs_with_no_supply:
-        rows_out.append(_base_row(d, 0, 0, 0, 0))
+        rows_out.append(_base_row(d, {}))
+
+    # Stamp each resolved facility×capability with its reconciled NFHS district, then write the long
+    # per-facility CLAIM table the app/agent CITE (only facilities that reconciled to an NFHS district).
+    claim_rows = []
+    for fr in facilities_resolved:
+        nd = poly_key_to_nd.get(fr["poly_key"])
+        if nd is None:
+            continue
+        claim_rows.append({
+            "unique_id": fr["unique_id"], "name": fr["name"], "city": fr["city"], "pincode": fr["pincode"],
+            "source_url": fr["source_url"], "operator": fr["operator"],
+            "district_key": normalize_name(nd["district_name"]),
+            "nfhs_district": nd["district_name"].strip(), "state_ut": nd["state_ut"].strip(),
+            "capability": fr["capability"], "claim_confidence": fr["claim_confidence"],
+            "claim_terms": fr["claim_terms"], "corroborating_terms": fr["corroborating_terms"],
+            "capability_evidence": fr["capability_evidence"], "procedure_evidence": fr["procedure_evidence"],
+        })
+
+    # district × capability aggregate (long). Every NFHS district appears for every capability —
+    # including all-zero rows, so the coverage view can show the deserts, not just where supply exists.
+    dc: dict[tuple, dict] = {}
+    for key, agg in supply_by_poly.items():
+        nd = poly_key_to_nd.get(key)
+        if nd is None:
+            continue
+        dkey = normalize_name(nd["district_name"])
+        for cap in CAPABILITIES:
+            cc = agg["caps"][cap]
+            row = dc.setdefault((dkey, cap), {"district_key": dkey,
+                "nfhs_district": nd["district_name"].strip(), "state_ut": nd["state_ut"].strip(),
+                "capability": cap, "high": 0, "medium": 0, "unverified": 0})
+            row["high"] += cc["high"]; row["medium"] += cc["medium"]; row["unverified"] += cc["unverified"]
+    for d in nfhs_with_no_supply:                       # zero-supply districts = candidate deserts
+        dkey = normalize_name(d["district_name"])
+        for cap in CAPABILITIES:
+            dc.setdefault((dkey, cap), {"district_key": dkey, "nfhs_district": d["district_name"].strip(),
+                "state_ut": d["state_ut"].strip(), "capability": cap, "high": 0, "medium": 0, "unverified": 0})
+    dc_rows = []
+    for row in dc.values():
+        row["verified_supply"] = row["high"] + row["medium"]
+        row["total_signal"] = row["high"] + row["medium"] + row["unverified"]
+        dc_rows.append(row)
 
     # 6. write outputs
     with OUT_CSV.open("w", newline="") as f:
@@ -184,6 +288,14 @@ def resolve(force_fetch: bool = False) -> dict:
         w = csv.writer(f)
         w.writerow(["polygon_district", "facilities", "fuzzy_suggestion", "reason"])
         w.writerows(sorted(unmatched_polys, key=lambda x: -x[1]))
+    if claim_rows:
+        with FACILITY_CLAIMS_CSV.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(claim_rows[0].keys()))
+            w.writeheader(); w.writerows(claim_rows)
+    if dc_rows:
+        with DISTRICT_CAPABILITY_CSV.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(dc_rows[0].keys()))
+            w.writeheader(); w.writerows(dc_rows)
 
     stats = {
         "facilities_total": len(facilities),
@@ -194,8 +306,10 @@ def resolve(force_fetch: bool = False) -> dict:
         "unmatched_polygon_districts": len(unmatched_polys),
         "nfhs_districts_total": len(nfhs),
         "nfhs_districts_with_zero_supply": len(nfhs_with_no_supply),
+        "facility_capability_claims": len(claim_rows),
+        "district_capability_rows": len(dc_rows),
     }
-    return {"stats": stats, "rows": rows_out}
+    return {"stats": stats, "rows": rows_out, "claim_rows": claim_rows, "dc_rows": dc_rows}
 
 
 if __name__ == "__main__":

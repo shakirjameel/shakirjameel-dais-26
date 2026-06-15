@@ -10,9 +10,122 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mission_core.cost import mission_cost, CostAssumptions
 from mission_core.burden import parse_nfhs_value, burden_score
-from mission_core.coverage import coverage_gap, supply_adequacy
+from mission_core.coverage import (coverage_gap, supply_adequacy, trust_weighted_supply,
+                                    gap_classification)
+from mission_core.coverage_view import coverage_by_geography, coverage_summary
 from mission_core.impact import need_addressed_per_cost, people_reached
 from mission_core.chain import rank_districts
+from mission_core.claims import classify_claim, summarize_claims
+
+
+# ---------- claim verification (treat free-text as claims to verify) ----------
+def _fac(cap="", proc="", equip="", desc="", flag=0):
+    return {"unique_id": "x", "capability": cap, "procedure": proc,
+            "equipment": equip, "description": desc, "maternal_supply": flag}
+
+def test_claim_high_when_capability_claims_and_procedure_corroborates():
+    f = _fac(cap='["Maternity care including prenatal check-ups"]',
+             proc='["Cesarean deliveries (C-sections) performed"]', flag=1)
+    r = classify_claim(f, "maternal_health")
+    assert r["confidence"] == "high"
+    assert r["claimed"] and r["corroborated"]
+    assert r["capability_evidence"] and r["procedure_evidence"]  # citable text, not invented
+
+def test_claim_medium_when_claimed_but_uncorroborated():
+    f = _fac(cap='["Obstetrics and gynaecology department"]',
+             proc='["General outpatient consultation"]', flag=1)
+    r = classify_claim(f, "maternal_health")
+    assert r["confidence"] == "medium"
+    assert r["claimed"] and not r["corroborated"]
+
+def test_claim_unverified_when_flag_only_and_text_contradicts():
+    # the noisy flag asserts maternal, but the facility's own text is an eye hospital
+    f = _fac(cap='["Eye care hospital","Cataract surgery"]',
+             proc='["Phacoemulsification"]', flag=1)
+    r = classify_claim(f, "maternal_health")
+    assert r["confidence"] == "unverified"
+    assert not r["claimed"]
+
+def test_claim_none_when_no_flag_and_no_text():
+    r = classify_claim(_fac(cap='["Dental clinic"]', flag=0), "maternal_health")
+    assert r["confidence"] == "none"
+
+def test_generic_delivery_does_not_corroborate():
+    # "drug delivery" / "radiation delivery" must NOT count as childbirth corroboration
+    f = _fac(cap='["Gynaecology services"]',
+             proc='["VMAT planning and delivery","Targeted drug delivery"]', flag=1)
+    r = classify_claim(f, "maternal_health")
+    assert not r["corroborated"] and r["confidence"] == "medium"
+
+def test_capability_nicu_high_with_equipment_corroboration():
+    f = _fac(cap='["NICU with neonatal care"]', equip='["Radiant warmer","Incubator"]')
+    r = classify_claim(f, "nicu")
+    assert r["confidence"] == "high" and r["capability"] == "nicu"
+
+def test_capability_icu_claimed_without_ventilator_is_medium():
+    f = _fac(cap='["Has an ICU and high dependency unit"]', proc='["General consultation"]')
+    r = classify_claim(f, "icu")
+    assert r["confidence"] == "medium" and not r["corroborated"]
+
+def test_capability_specialties_count_as_claim_source():
+    # the controlled `specialties` field is a claim source for any capability
+    f = {"capability": "", "description": "", "procedure": '["Chemotherapy"]', "equipment": "",
+         "specialties": '["medicalOncology"]', "maternal_supply": 0}
+    r = classify_claim(f, "oncology")
+    assert r["confidence"] == "high" and r["claimed"]
+
+def test_capability_isolation_eye_hospital_not_maternity():
+    # an eye hospital must be 'none' for maternity (no flag, no maternal claim)
+    f = _fac(cap='["Eye care hospital"]', proc='["Phacoemulsification"]', flag=0)
+    assert classify_claim(f, "maternity")["confidence"] == "none"
+
+def test_maternal_health_alias_maps_to_maternity():
+    f = _fac(cap='["maternity"]', proc='["cesarean deliveries"]', flag=1)
+    assert classify_claim(f, "maternal_health")["capability"] == "maternity"
+
+def test_summarize_counts_and_picks_verified_supply():
+    facs = [
+        _fac(cap='["maternity"]', proc='["cesarean deliveries"]', flag=1),       # high
+        _fac(cap='["obstetrics dept"]', proc='["opd"]', flag=1),                  # medium
+        _fac(cap='["eye hospital"]', flag=1),                                     # unverified
+        _fac(cap='["dental"]', flag=0),                                           # none
+    ]
+    s = summarize_claims(facs, "maternal_health")
+    assert (s["high"], s["medium"], s["unverified"], s["none"]) == (1, 1, 1, 1)
+    assert s["verified_supply"] == 2                       # flag-only is NOT counted as supply
+    assert s["best_evidence"]["confidence"] == "high"     # exemplar is the corroborated one
+
+
+# ---------- trust-weighting + coverage-by-geography ----------
+def test_trust_weighted_supply_weights_and_toggle():
+    assert trust_weighted_supply(2, 0, 5) == 2.0                       # high·1
+    assert trust_weighted_supply(1, 5, 0) == 1 + 5 * 0.6              # +medium·0.6
+    assert trust_weighted_supply(0, 0, 4, count_unverified=False) == 0.0   # unverified ignored by default
+    assert trust_weighted_supply(0, 0, 4, count_unverified=True) == round(4 * 0.3, 3)
+
+def test_gap_classification_distinguishes_real_gap_from_data_poor():
+    assert gap_classification(1, 0, 3) == "confirmed_coverage"        # some verified
+    assert gap_classification(0, 0, 4) == "unverified_claims"         # claimed only, none corroborated
+    assert gap_classification(0, 0, 0) == "no_claim_desert"           # nobody even claims it
+
+def test_coverage_by_geography_ranks_and_classifies():
+    rows = coverage_by_geography("maternity", state="Bihar")
+    assert rows, "expected Bihar maternity coverage rows"
+    assert rows[0]["rank"] == 1 and rows[0]["desert_score"] >= rows[-1]["desert_score"]  # sorted desc
+    assert {r["gap_classification"] for r in rows} <= {
+        "confirmed_coverage", "unverified_claims", "no_claim_desert"}
+    assert rows[0]["has_burden"]                                       # maternity carries NFHS burden
+    s = coverage_summary(rows)
+    assert s["districts"] == len(rows)
+
+def test_coverage_non_maternity_has_no_burden():
+    rows = coverage_by_geography("nicu", state="Bihar")
+    assert rows and not rows[0]["has_burden"]                          # NICU has no NFHS burden indicator
+
+def test_coverage_toggle_changes_trust_weighted_supply():
+    off = {r["district"]: r["trust_weighted_supply"] for r in coverage_by_geography("maternity", "Bihar", count_unverified=False)}
+    on = {r["district"]: r["trust_weighted_supply"] for r in coverage_by_geography("maternity", "Bihar", count_unverified=True)}
+    assert any(on[d] > off[d] for d in off)                           # counting unverified raises some supply
 
 
 # ---------- cost ----------
