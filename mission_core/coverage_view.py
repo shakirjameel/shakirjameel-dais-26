@@ -14,7 +14,8 @@ from __future__ import annotations
 from .data_access import load_district_capability, load_districts, normalize_name
 from .burden import burden_score
 from .coverage import (trust_weighted_supply, supply_adequacy, gap_classification,
-                       data_confidence, SUPPLY_HALF_SATURATION)
+                       state_fill_category, SUPPLY_HALF_SATURATION)
+from .geo_names import list_topo_states, from_topo_state
 
 # Only maternity has an NFHS-5 burden indicator; other capabilities rank on supply scarcity alone
 # (clearly labelled "no burden indicator for this capability").
@@ -63,9 +64,6 @@ def coverage_by_geography(capability: str, state: str = None, count_unverified: 
             "high": r["high"], "medium": r["medium"], "unverified": r["unverified"],
             "verified_supply": r["verified_supply"],
             "trust_weighted_supply": tws,
-            "evidence_strength": tws,   # alias: this is EVIDENCE strength, not care quality
-            "data_confidence": data_confidence(
-                facilities_by_key.get(r["district_key"], 0), total_signal, r["verified_supply"]),
             "supply_adequacy": round(adeq, 4),
             "trust_ratio": round(r["verified_supply"] / total_signal, 3) if total_signal else None,
             "gap_classification": cls,
@@ -79,6 +77,39 @@ def coverage_by_geography(capability: str, state: str = None, count_unverified: 
     for i, x in enumerate(out, 1):
         x["rank"] = i
     return out[:top_n] if top_n else out
+
+
+def state_rollup(capability: str, count_unverified: bool = False) -> list[dict]:
+    """One row per MAP topology state (all 36), for the country choropleth + stat rail. Reuses the
+    per-district coverage and rolls it up; states with no facilities at all render 'no_data' (never
+    score 0). `fill_category` is the map colour (see coverage.state_fill_category)."""
+    rows = coverage_by_geography(capability, None, count_unverified)
+    our_states = sorted({r["state"] for r in rows})
+    by_state: dict[str, list] = {}
+    for r in rows:
+        by_state.setdefault(r["state"], []).append(r)
+
+    out = []
+    for st_nm in list_topo_states():
+        our = from_topo_state(st_nm, our_states)
+        drs = by_state.get(our, []) if our else []
+        total_fac = sum(r["total_facilities"] for r in drs)
+        n_conf = sum(1 for r in drs if r["gap_classification"] == "confirmed_coverage")
+        n_claim = sum(1 for r in drs if r["gap_classification"] == "unverified_claims")
+        n_des = sum(1 for r in drs if r["gap_classification"] == "no_claim_desert")
+        data_bearing = [r["desert_score"] for r in drs if r["total_facilities"] > 0]
+        mean_desert = round(sum(data_bearing) / len(data_bearing), 4) if data_bearing else None
+        lit = total_fac > 0
+        out.append({
+            "st_nm": st_nm, "our_state": our, "lit": lit,
+            "n_districts": len(drs), "total_facilities": total_fac,
+            "verified_facilities": sum(r["verified_supply"] for r in drs),
+            "n_confirmed": n_conf, "n_claim_only": n_claim, "n_desert": n_des,
+            "mean_desert_score": mean_desert,
+            "fill_category": state_fill_category(lit=lit, n_confirmed=n_conf,
+                                                 n_claim_only=n_claim, mean_desert_score=mean_desert),
+        })
+    return out
 
 
 def coverage_summary(rows: list[dict]) -> dict:

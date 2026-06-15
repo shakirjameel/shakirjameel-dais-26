@@ -12,7 +12,10 @@ from mission_core.cost import mission_cost, CostAssumptions
 from mission_core.burden import parse_nfhs_value, burden_score
 from mission_core.coverage import (coverage_gap, supply_adequacy, trust_weighted_supply,
                                     gap_classification)
-from mission_core.coverage_view import coverage_by_geography, coverage_summary
+from mission_core.coverage_view import coverage_by_geography, coverage_summary, state_rollup
+from mission_core.coverage import state_fill_category
+from mission_core.geo_names import to_topo_state, list_topo_states
+from mission_core.data_access import load_districts
 from mission_core.impact import need_addressed_per_cost, people_reached
 from mission_core.chain import rank_districts
 from mission_core.claims import classify_claim, summarize_claims
@@ -94,6 +97,39 @@ def test_summarize_counts_and_picks_verified_supply():
     assert (s["high"], s["medium"], s["unverified"], s["none"]) == (1, 1, 1, 1)
     assert s["verified_supply"] == 2                       # flag-only is NOT counted as supply
     assert s["best_evidence"]["confidence"] == "high"     # exemplar is the corroborated one
+
+
+# ---------- map: state reconciliation + rollup (no grey holes, no false zeros) ----------
+def test_state_reconciliation_aliases():
+    assert to_topo_state("Maharastra") == "Maharashtra"        # misspelling
+    assert to_topo_state("NCT of Delhi") == "Delhi"            # curated alias
+    assert to_topo_state("Jammu & Kashmir") == "Jammu and Kashmir"   # & -> and
+    assert to_topo_state("Andaman & Nicobar Islands") == "Andaman and Nicobar Islands"
+
+def test_all_lit_states_reconcile_no_grey_holes():
+    fac = {}
+    for d in load_districts():
+        fac[d["state_ut"].strip()] = fac.get(d["state_ut"].strip(), 0) + int(d.get("facilities") or 0)
+    unmapped = [s for s, n in fac.items() if n > 0 and to_topo_state(s) is None]
+    assert unmapped == [], f"lit states with no topology match (grey holes): {unmapped}"
+
+def test_state_fill_category_rules():
+    assert state_fill_category(lit=False, n_confirmed=0, n_claim_only=0, mean_desert_score=None) == "no_data"
+    assert state_fill_category(lit=True, n_confirmed=0, n_claim_only=0, mean_desert_score=None) == "no_claim_desert"
+    assert state_fill_category(lit=True, n_confirmed=0, n_claim_only=3, mean_desert_score=None) == "claim_only"
+    assert state_fill_category(lit=True, n_confirmed=5, n_claim_only=0, mean_desert_score=0.1) == "strong"
+    assert state_fill_category(lit=True, n_confirmed=5, n_claim_only=0, mean_desert_score=0.42) == "moderate"
+    assert state_fill_category(lit=True, n_confirmed=5, n_claim_only=0, mean_desert_score=0.8) == "weaker"
+
+def test_state_rollup_covers_all_topo_states_and_marks_no_data():
+    roll = state_rollup("maternity")
+    assert len(roll) == len(list_topo_states())          # one row per map state
+    by = {r["st_nm"]: r for r in roll}
+    # a state with no facilities renders no_data, never a misleading score-0 'good coverage'
+    assert by["Ladakh"]["fill_category"] == "no_data" and not by["Ladakh"]["lit"]
+    assert by["Sikkim"]["fill_category"] == "no_data"
+    # a data-rich state is lit and not no_data
+    assert by["Kerala"]["lit"] and by["Kerala"]["fill_category"] != "no_data"
 
 
 # ---------- trust-weighting + coverage-by-geography ----------
