@@ -20,12 +20,20 @@ st.set_page_config(page_title="Mission Deployment Copilot", page_icon="🩺", la
 DBX_RED, DBX_INK, DBX_SAND = "#FF3621", "#0B2026", "#F9F7F4"
 st.markdown(f"""
 <style>
-  .stApp {{ background: {DBX_SAND}; }}
-  .hero {{ background:{DBX_INK}; color:#fff; padding:18px 24px; border-radius:12px; margin-bottom:8px; }}
+  .stApp {{ background: {DBX_SAND}; color:{DBX_INK}; }}
+  /* force readable dark text everywhere on the light background */
+  .stApp, .stApp p, .stApp span, .stApp label, .stApp li,
+  .stApp .stMarkdown, [data-testid="stMetricValue"], [data-testid="stMetricLabel"] {{ color:{DBX_INK}; }}
+  [data-testid="stMetricValue"] {{ color:{DBX_INK} !important; font-weight:700; }}
+  [data-testid="stMetricLabel"] p {{ color:#5b6770 !important; }}
+  .hero, .hero * {{ color:#fff !important; }}
+  .hero {{ background:{DBX_INK}; padding:18px 24px; border-radius:12px; margin-bottom:8px; }}
   .hero h1 {{ margin:0; font-size:1.5rem; }}
-  .hero p {{ margin:.25rem 0 0; opacity:.8; font-size:.9rem; }}
-  .tierbar {{ border-left:5px solid {DBX_RED}; padding:.2rem 0 .2rem .7rem; margin:.4rem 0; font-weight:600; }}
+  .hero p {{ margin:.25rem 0 0; opacity:.85; font-size:.9rem; }}
+  .tierbar {{ border-left:5px solid {DBX_RED}; padding:.2rem 0 .2rem .7rem; margin:.4rem 0;
+              font-weight:700; color:{DBX_INK}; }}
   .card {{ background:#fff; border:1px solid #e6e3dd; border-radius:10px; padding:14px 16px; margin-bottom:10px; }}
+  .card b {{ color:{DBX_INK}; }}
   .pill {{ display:inline-block; padding:2px 9px; border-radius:999px; font-size:.72rem; font-weight:600; }}
   .pill-hi {{ background:#e8f5e9; color:#1b5e20; }}
   .pill-med {{ background:#fff3e0; color:#e65100; }}
