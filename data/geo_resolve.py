@@ -193,6 +193,8 @@ def resolve(force_fetch: bool = False) -> dict:
                     "corroborating_terms": "; ".join(claim["corroborating_terms"]),
                     "capability_evidence": claim["capability_evidence"] or "",
                     "procedure_evidence": claim["procedure_evidence"] or "",
+                    "corroboration_available": int(claim["corroboration_available"]),
+                    "reason": claim["reason"],
                 })
 
     print(f"point-in-polygon: {resolved} resolved, {unresolved} unresolved "
@@ -253,6 +255,7 @@ def resolve(force_fetch: bool = False) -> dict:
             "capability": fr["capability"], "claim_confidence": fr["claim_confidence"],
             "claim_terms": fr["claim_terms"], "corroborating_terms": fr["corroborating_terms"],
             "capability_evidence": fr["capability_evidence"], "procedure_evidence": fr["procedure_evidence"],
+            "corroboration_available": fr["corroboration_available"], "reason": fr["reason"],
         })
 
     # district × capability aggregate (long). Every NFHS district appears for every capability —

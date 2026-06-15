@@ -181,6 +181,11 @@ def classify_claim(facility: dict, capability: str = "maternity") -> dict:
     corrob_terms = _all_hits(corrob_items, terms["corroborate"])
     claimed = bool(claim_terms)
     corroborated = bool(corrob_terms)
+    # Was there ANY procedure/equipment text to check against? Distinguishes "we looked and found
+    # no corroboration" (genuinely weak) from "there was nothing to look at" (a documentation gap,
+    # not evidence of absence). procedure ~92% / equipment ~77% populated, and thin-text facilities
+    # skew rural/public — so missing text must not be silently treated as a weaker service (R1/R2).
+    corroboration_available = bool(corrob_items)
 
     if claimed and corroborated:
         conf = "high"
@@ -191,11 +196,23 @@ def classify_claim(facility: dict, capability: str = "maternity") -> dict:
     else:
         conf = "none"
 
+    if claimed and corroborated:
+        reason = "claimed and corroborated by procedure/equipment text"
+    elif claimed and corroboration_available:
+        reason = "claimed; procedure/equipment text present but does not mention the service"
+    elif claimed:
+        reason = "claimed; no procedure/equipment text available to corroborate (undocumented, not disproven)"
+    elif flag:
+        reason = "structured flag only; the facility's own text does not claim the service"
+    else:
+        reason = "no claim or flag for this service"
+
     _, cap_ev = _first_hit(claim_items, terms["claim"])
     _, proc_ev = _first_hit(corrob_items, terms["corroborate"])
     return {
         "capability": capability, "confidence": conf,
         "claimed": claimed, "corroborated": corroborated, "flag": flag,
+        "corroboration_available": corroboration_available, "reason": reason,
         "claim_terms": claim_terms, "corroborating_terms": corrob_terms,
         "capability_evidence": cap_ev, "procedure_evidence": proc_ev,
     }

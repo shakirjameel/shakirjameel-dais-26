@@ -152,7 +152,7 @@ if not rows:
     st.stop()
 summary = coverage_summary(rows)
 
-st.markdown(f'<div class="tierbar">Coverage &amp; trust — <b>{cap_label}</b> across <b>{state}</b> '
+st.markdown(f'<div class="tierbar">Coverage &amp; evidence strength — <b>{cap_label}</b> across <b>{state}</b> '
             f'({summary["districts"]} districts)</div>', unsafe_allow_html=True)
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("✅ Confirmed coverage", summary["confirmed_coverage"])
@@ -165,15 +165,18 @@ table = pd.DataFrame([{
     "rank": r["rank"], "district": r["district"],
     "gap": GAP_BADGE[r["gap_classification"]][1],
     "verified": r["verified_supply"], "unverified": r["unverified"],
-    "trust_ratio": r["trust_ratio"], "facilities": r["total_facilities"],
+    "evidence_strength": r["evidence_strength"], "facilities": r["total_facilities"],
+    "data_confidence": r["data_confidence"],
     **({"burden": r["burden"]} if has_burden else {}),
     "desert_score": r["desert_score"],
 } for r in rows])
 st.dataframe(table, width="stretch", hide_index=True, height=330)
-st.caption(("Desert score = burden × (1 − trust-weighted adequacy). " if has_burden else
+st.caption(("Desert score = burden × (1 − evidence-weighted adequacy). " if has_burden else
             "No NFHS burden indicator for this capability — desert score = supply scarcity only. ") +
-           "‘Trust-weighted’: corroborated claims count fully, claimed-only at 0.6, flag-only at 0 "
-           f"(or 0.3 with the toggle{' — currently ON' if count_unverified else ''}).")
+           "‘Evidence strength’: corroborated claims count fully, claimed-only at 0.6, flag-only at 0 "
+           f"(or 0.3 with the toggle{' — currently ON' if count_unverified else ''}). "
+           "‘Data confidence’ is documentation density, NOT care quality: a ‘data-poor’ district may "
+           "hide a real desert OR just missing data — verify before acting.")
 
 # ----------------------------------------------------------------------------- drill into a district
 st.divider()
@@ -185,7 +188,7 @@ st.markdown(
     f'**{pick}, {state}** &nbsp; {_pill(cls_cls, cls_txt)}<br>'
     f'<span class="muted">text-verified supply <b>{row["verified_supply"]}</b> '
     f'(high {row["high"]}, medium {row["medium"]}) · unverified {row["unverified"]} · '
-    f'trust-weighted {row["trust_weighted_supply"]} · '
+    f'evidence strength {row["evidence_strength"]} · data confidence <b>{row["data_confidence"]}</b> · '
     + (f'burden {row["burden"]} ({row["burden_confidence"]}) · ' if has_burden else "")
     + f'desert score {row["desert_score"]}</span>', unsafe_allow_html=True)
 
@@ -203,7 +206,11 @@ if claims:
             + (f'<br><b>claims:</b> “{cap_ev}”' if cap_ev else
                '<br><b>claims:</b> <i>flag/specialty asserts it, but the facility’s own text doesn’t — unverified</i>')
             + (f'<br><b>corroborated by:</b> “{proc_ev}”' if proc_ev else
-               ('<br><span class="muted">not corroborated by procedure/equipment text</span>' if cap_ev else ''))
+               ('<br><span class="muted">' + (
+                   'no procedure/equipment text available to corroborate — undocumented, not disproven'
+                   if str(c.get("corroboration_available")) in ("0", "False", "")
+                   else 'procedure/equipment text present but does not mention the service')
+                + '</span>' if cap_ev else ''))
             + '</div>', unsafe_allow_html=True)
     st.caption("Each line is the facility's own extracted text — cited with its source link, not paraphrased.")
 else:

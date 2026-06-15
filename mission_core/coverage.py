@@ -44,6 +44,21 @@ def coverage_gap(burden: float | None, reachable_relevant_supply: float,
 TRUST_WEIGHTS = {"high": 1.0, "medium": 0.6, "unverified": 0.3}
 
 
+def data_confidence(total_facilities: int, total_signal: int, verified_supply: int) -> str:
+    """Documentation / data-density confidence for a district's coverage signal — reported SEPARATELY
+    from the coverage gap, and described as EVIDENCE STRENGTH, not care quality. It tells a real care
+    desert (people present, no verified care) apart from a data-poor region (little facility data of
+    any kind), so a thin-documentation (often rural/public) district is not read as 'low coverage'
+    when it is really 'low information' (R1/R2)."""
+    if total_facilities == 0:
+        return "data-poor"          # nothing resolved here — could be a real desert OR missing data
+    if verified_supply > 0:
+        return "well-evidenced"     # at least one text-verified provider
+    if total_signal > 0:
+        return "claims-only"        # facilities assert it but none corroborated — verify
+    return "documented-gap"          # facilities present, none even claim this service
+
+
 def trust_weighted_supply(high: int, medium: int, unverified: int,
                           count_unverified: bool = False) -> float:
     """Trust-weighted facility supply for a district×capability. high·1.0 + medium·0.6, plus

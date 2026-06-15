@@ -14,7 +14,7 @@ from __future__ import annotations
 from .data_access import load_district_capability, load_districts, normalize_name
 from .burden import burden_score
 from .coverage import (trust_weighted_supply, supply_adequacy, gap_classification,
-                       SUPPLY_HALF_SATURATION)
+                       data_confidence, SUPPLY_HALF_SATURATION)
 
 # Only maternity has an NFHS-5 burden indicator; other capabilities rank on supply scarcity alone
 # (clearly labelled "no burden indicator for this capability").
@@ -63,6 +63,9 @@ def coverage_by_geography(capability: str, state: str = None, count_unverified: 
             "high": r["high"], "medium": r["medium"], "unverified": r["unverified"],
             "verified_supply": r["verified_supply"],
             "trust_weighted_supply": tws,
+            "evidence_strength": tws,   # alias: this is EVIDENCE strength, not care quality
+            "data_confidence": data_confidence(
+                facilities_by_key.get(r["district_key"], 0), total_signal, r["verified_supply"]),
             "supply_adequacy": round(adeq, 4),
             "trust_ratio": round(r["verified_supply"] / total_signal, 3) if total_signal else None,
             "gap_classification": cls,
