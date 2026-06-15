@@ -69,6 +69,37 @@ def test_get_district_detail_has_cost_breakdown_and_provenance():
 def test_dispatch_unknown_tool_is_structured_error():
     assert "error" in T.dispatch("nonexistent_tool", {})
 
+def test_coverage_by_geography_tool_classifies_and_summarizes():
+    out = T.coverage_by_geography("nicu", state="Bihar")
+    assert out["capability"] == "nicu" and out["districts"]
+    assert out["summary"]["districts"] >= 1
+    assert {d["gap_classification"] for d in out["districts"]} <= {
+        "confirmed_coverage", "unverified_claims", "no_claim_desert"}
+
+def test_get_district_facilities_cites_name_source_and_grades():
+    # find a Bihar district with verified maternity supply, then assert we CITE name + source + text
+    cov = T.coverage_by_geography("maternity", state="Bihar", top_n=80)
+    cited = None
+    for d in cov["districts"]:
+        fac = T.get_district_facilities(d["district"], "maternity")
+        if fac.get("verified_supply"):
+            cited = fac
+            break
+    assert cited is not None, "expected a Bihar district with a text-verified maternity claim"
+    assert set(cited["counts"]) == {"high", "medium", "unverified"}
+    top = cited["facilities"][0]
+    assert top["claim_confidence"] in ("high", "medium")
+    assert top["claimed_capability_text"]            # the underlying facility TEXT, cited not invented
+    assert top["facility_name"] and top["source_url"]  # provenance: name + source link
+
+def test_brief_cites_facility_evidence():
+    ranked = T.rank_districts_tool("maternal_health", top_n=40)
+    name = next((r["district"] for r in ranked["confirmed_gaps"]
+                 if T.get_district_facilities(r["district"], "maternity").get("verified_supply")),
+                ranked["confirmed_gaps"][0]["district"])
+    brief = T.generate_brief("maternal_health", name)["brief"]
+    assert "FACILITY EVIDENCE" in brief               # cites the underlying facility text
+
 def test_sensitivity_analysis_reports_robustness():
     out = T.sensitivity_analysis("maternal_health", "surgeon_day_value_usd")
     assert out["baseline_top"]                 # a concrete #1 district

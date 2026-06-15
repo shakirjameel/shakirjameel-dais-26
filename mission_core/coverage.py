@@ -34,3 +34,35 @@ def coverage_gap(burden: float | None, reachable_relevant_supply: float,
         "reachable_supply": reachable_relevant_supply,
         "half_saturation": half_sat,
     }
+
+
+# --------------------------------------------------------------------------- trust-weighting
+# Weights for "trust-weighted supply": a corroborated claim counts fully, a claimed-only facility
+# partially, and a flag-only ('unverified') facility nothing — UNLESS the planner opts to count
+# unverified claims (the honesty toggle), in which case it contributes a discounted amount. These
+# are mission-planning assumptions (adjustable), not clinical standards.
+TRUST_WEIGHTS = {"high": 1.0, "medium": 0.6, "unverified": 0.3}
+
+
+def trust_weighted_supply(high: int, medium: int, unverified: int,
+                          count_unverified: bool = False) -> float:
+    """Trust-weighted facility supply for a district×capability. high·1.0 + medium·0.6, plus
+    unverified·0.3 ONLY when count_unverified is on. This is the 'trust-weighted evidence' the
+    Track-2 coverage aggregate is built on — verified evidence outweighs an uncorroborated claim."""
+    s = high * TRUST_WEIGHTS["high"] + medium * TRUST_WEIGHTS["medium"]
+    if count_unverified:
+        s += unverified * TRUST_WEIGHTS["unverified"]
+    return round(s, 3)
+
+
+def gap_classification(high: int, medium: int, unverified: int) -> str:
+    """Distinguish a REAL care gap from a DATA-poor region (the literal Track-2 question):
+      confirmed_coverage — at least one facility's claim is text-verified (high or medium).
+      unverified_claims  — facilities assert the capability (flag/specialty) but NONE is corroborated
+                           by their own text → a claim to verify, not a confirmed service.
+      no_claim_desert    — no facility here even claims this capability → a candidate care desert."""
+    if high + medium > 0:
+        return "confirmed_coverage"
+    if unverified > 0:
+        return "unverified_claims"
+    return "no_claim_desert"

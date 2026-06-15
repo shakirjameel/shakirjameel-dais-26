@@ -1,9 +1,16 @@
 command:
   # Run via sh so ${DATABRICKS_APP_PORT} expands — Databricks Apps runs `command` without a shell,
   # so a bare "${DATABRICKS_APP_PORT:-8000}" arg reaches Streamlit literally and fails to parse.
+  #
+  # WRITEPROBE: before serving, prove the App service principal can WRITE+READ its own Lakebase
+  # schema (mission_app). Runtime SP writes are otherwise untested (load_lakebase runs as the user),
+  # and SP/Postgres grants were our prior deploy pain. `|| true` so a probe failure logs but never
+  # blocks startup — the read-only dashboard still works. Look for "[WRITEPROBE] ok" in app logs.
   - sh
   - -c
-  - streamlit run app.py --server.port ${DATABRICKS_APP_PORT:-8000} --server.address 0.0.0.0
+  - >
+    python -c "from mission_core import data_access as da; print('[WRITEPROBE]', da.store_probe())" || echo "[WRITEPROBE] FAILED (SP cannot write mission_app — user actions will not persist)";
+    streamlit run app.py --server.port ${DATABRICKS_APP_PORT:-8000} --server.address 0.0.0.0
 env:
   # Streamlit on Databricks Apps: the reverse-proxy origin differs from the workspace origin.
   - name: STREAMLIT_SERVER_ENABLE_CORS
