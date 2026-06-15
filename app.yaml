@@ -1,0 +1,28 @@
+command:
+  # Run via sh so ${DATABRICKS_APP_PORT} expands — Databricks Apps runs `command` without a shell,
+  # so a bare "${DATABRICKS_APP_PORT:-8000}" arg reaches Streamlit literally and fails to parse.
+  - sh
+  - -c
+  - streamlit run app.py --server.port ${DATABRICKS_APP_PORT:-8000} --server.address 0.0.0.0
+env:
+  # Streamlit on Databricks Apps: the reverse-proxy origin differs from the workspace origin.
+  - name: STREAMLIT_SERVER_ENABLE_CORS
+    value: "false"
+  - name: STREAMLIT_SERVER_ENABLE_XSRF_PROTECTION
+    value: "false"
+  # The `postgres` app resource (databricks.yml) injects PGHOST/PGUSER and provisions the SP's
+  # Postgres role — but NOT LAKEBASE_ENDPOINT, which the SDK needs to mint a DB credential.
+  # It's the endpoint resource path (not secret), so set it explicitly.
+  - name: LAKEBASE_ENDPOINT
+    value: "projects/mission-copilot/branches/production/endpoints/primary"
+  # Connect as the app SP's client id — matches the Postgres role the `postgres` resource
+  # provisioned and that we GRANTed SELECT on mission.* to.
+  - name: PGUSER
+    value: "355b9275-0af4-4e57-b04c-f60cca3d9311"
+  # LLM (provider-agnostic). Key comes from the `llm-key` secret resource.
+  - name: LLM_BASE_URL
+    value: "https://api.anthropic.com/v1"
+  - name: LLM_MODEL
+    value: "claude-opus-4-8"
+  - name: LLM_API_KEY
+    valueFrom: "llm-key"

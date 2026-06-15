@@ -1,0 +1,7 @@
+# Databricks App (Streamlit) runtime dependencies. Pure-Python wheels only (no system packages).
+streamlit>=1.40
+pandas>=2.0
+psycopg[binary]>=3.1     # Lakebase Postgres
+openai>=1.40             # provider-agnostic LLM client (Anthropic now, OpenAI later via env)
+databricks-sdk>=0.117    # SP auth + Lakebase credential (w.postgres needs >=0.81; base image ships older)
+truststore>=0.9          # OS trust store for SSL (harmless in-cloud; needed behind proxies locally)

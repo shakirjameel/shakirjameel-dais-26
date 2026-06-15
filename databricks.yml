@@ -1,0 +1,40 @@
+# DABs bundle for the Mission Deployment Copilot Databricks App.
+# Declares the app's resources so the platform auto-grants the service principal:
+#   - postgres (Lakebase): injects PG*/LAKEBASE_ENDPOINT env + provisions the SP's Postgres role
+#   - secret (llm-key):    injects LLM_API_KEY from the secret scope (referenced via valueFrom in app.yaml)
+# Runtime command + non-resource env live in app.yaml.
+bundle:
+  name: mission-copilot
+
+sync:
+  exclude:
+    - ".venv/**"
+    - "data/cache/**"      # regenerable; 44MB geojson exceeds the 10MB/file app limit
+    - "**/__pycache__/**"
+    - "context/**"
+    - "tests/**"
+    - ".env"
+
+resources:
+  apps:
+    mission_copilot:
+      name: mission-copilot
+      description: "Medical Mission Deployment Copilot — cost-per-impact district ranking on Lakebase."
+      source_code_path: .
+      resources:
+        - name: postgres
+          postgres:
+            branch: projects/mission-copilot/branches/production
+            database: projects/mission-copilot/branches/production/databases/databricks-postgres
+            permission: CAN_CONNECT_AND_CREATE
+        - name: llm-key
+          secret:
+            scope: mission-copilot
+            key: llm_api_key
+            permission: READ
+
+targets:
+  default:
+    default: true
+    workspace:
+      host: https://dbc-4e6d8605-f458.cloud.databricks.com

@@ -1,0 +1,11 @@
+# Local dev deps for the data connectors + geo resolution pipeline.
+# All are OPTIONAL — each module degrades to a pure-Python / fallback path without them —
+# but installing these makes the geo pipeline fast and the live fetches work behind a
+# TLS-intercepting proxy (Zscaler).
+requests>=2.31      # external HTTP (ORS, geoBoundaries)
+shapely>=2.0        # fast, correct point-in-polygon (STRtree); else pure-Python ray-casting
+truststore>=0.9     # route SSL through the OS trust store (needed behind Zscaler-style proxies)
+
+# agent/ (Rung 1) — provider-agnostic LLM client
+openai>=1.40        # OpenAI-compatible client (Anthropic / OpenAI / Databricks serving via base_url)
+databricks-sdk>=0.30  # optional — only for Databricks-served models (auto-auth from CLI profile)

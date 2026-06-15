@@ -216,3 +216,7 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Mission Copilot — cached external data pulls (regenerable; not source)
+data/cache/*
+!data/cache/.gitkeep
