@@ -1,6 +1,10 @@
+# App theme. primaryColor = teal (from the coverage palette) so the sidebar toggle's ON state reads
+# clearly (teal) vs OFF (grey) on the red filter panel; also tints primary button / sliders / the
+# table's Review checkboxes for a cohesive accent. (--accent red in app.py CSS is separate.)
+# base/palette pinned light so the app renders light regardless of the OS dark-mode setting.
 [theme]
 base = "light"
-primaryColor = "#FF3621"
+primaryColor = "#0F6E56"
 backgroundColor = "#F9F7F4"
 secondaryBackgroundColor = "#EEEDE9"
 textColor = "#0B2026"

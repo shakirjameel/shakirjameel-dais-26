@@ -76,6 +76,17 @@ def test_coverage_by_geography_tool_classifies_and_summarizes():
     assert {d["gap_classification"] for d in out["districts"]} <= {
         "confirmed_coverage", "unverified_claims", "no_claim_desert"}
 
+def test_optimize_deployment_tool_origin_and_honesty():
+    out = T.dispatch("optimize_deployment", {"capability": "maternity", "state": "Bihar",
+                                             "origin": "Delhi", "team_size": 6})
+    assert out["origin"] == "Delhi" and out["districts"]
+    d0 = out["districts"][0]
+    assert {"rank", "district", "cost_total_usd", "need_per_dollar", "days_to_meet_demand",
+            "accepts_volunteers"} <= set(d0)
+    # emergency has no NFHS demand → honest flag
+    em = T.dispatch("optimize_deployment", {"capability": "emergency", "state": "Bihar"})
+    assert em["demand_available"] is False
+
 def test_get_district_facilities_cites_name_source_and_grades():
     # find a Bihar district with verified maternity supply, then assert we CITE name + source + text
     cov = T.coverage_by_geography("maternity", state="Bihar", top_n=80)

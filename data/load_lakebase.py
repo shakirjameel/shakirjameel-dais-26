@@ -33,28 +33,30 @@ CACHE = Path(__file__).resolve().parent / "cache"
 # created it first and the SP gets "permission denied for schema mission_app" at runtime.
 APP_SP = os.environ.get("APP_SP_CLIENT_ID", "355b9275-0af4-4e57-b04c-f60cca3d9311")
 
-# district_base columns -> Postgres types. NFHS indicators stay TEXT to preserve '*'/'(x)' markers.
-DISTRICT_COLS = [
-    ("nfhs_district", "TEXT"), ("state_ut", "TEXT"),
-    ("facilities", "INT"), ("maternal_supply_facilities", "INT"),
-    ("public", "INT"), ("private", "INT"),
-    # maternal CLAIM aggregates (text-corroborated vs flag-only) — the "claims to verify" signal.
-    ("maternal_claim_high", "INT"), ("maternal_claim_medium", "INT"),
-    ("maternal_claim_unverified", "INT"), ("maternal_verified_supply", "INT"),
-    ("institutional_birth_5y_pct", "TEXT"),
-    ("mothers_who_had_at_least_4_anc_visits_lb5y_pct", "TEXT"),
-    ("births_attended_by_skilled_hp_5y_10_pct", "TEXT"),
-    ("all_w15_49_who_are_anaemic_pct", "TEXT"),
-    ("child_u5_who_are_stunted_height_for_age_18_pct", "TEXT"),
-]
+# district_base now carries ALL 109 NFHS indicators (so demand for any capability is available) +
+# supply/claim aggregates. Schema is built DYNAMICALLY from the CSV header: the counts below are INT,
+# everything else (every NFHS indicator) stays TEXT to preserve '*' (suppressed) / '(x)' markers.
+_DISTRICT_INT = {"facilities", "maternal_supply_facilities", "public", "private",
+                 "maternal_claim_high", "maternal_claim_medium", "maternal_claim_unverified",
+                 "maternal_verified_supply"}
+
+
+def _district_cols_from_header(csv_path: Path) -> list[tuple[str, str]]:
+    with csv_path.open() as f:
+        header = next(csv.reader(f))
+    return [(c, "INT" if c in _DISTRICT_INT else "TEXT") for c in header]
+
+
 REACH_COLS = [
     ("district_key", "TEXT"), ("district", "TEXT"), ("state", "TEXT"),
     ("distance_km", "DOUBLE PRECISION"), ("duration_min", "DOUBLE PRECISION"), ("source", "TEXT"),
 ]
-# Per-facility×capability claims (long) — the underlying facility TEXT + provenance the app/agent CITE.
+# Per-facility×capability claims (long) — the underlying facility TEXT + provenance + placement/contact.
 FACILITY_CLAIMS_COLS = [
     ("unique_id", "TEXT"), ("name", "TEXT"), ("city", "TEXT"), ("pincode", "TEXT"),
     ("source_url", "TEXT"), ("operator", "TEXT"),
+    ("capacity_beds", "TEXT"), ("number_doctors", "TEXT"), ("accepts_volunteers", "INT"),
+    ("organization_type", "TEXT"), ("facility_type", "TEXT"), ("phone", "TEXT"), ("website", "TEXT"),
     ("district_key", "TEXT"), ("nfhs_district", "TEXT"), ("state_ut", "TEXT"),
     ("capability", "TEXT"), ("claim_confidence", "TEXT"),
     ("claim_terms", "TEXT"), ("corroborating_terms", "TEXT"),
@@ -65,6 +67,12 @@ DISTRICT_CAPABILITY_COLS = [
     ("district_key", "TEXT"), ("nfhs_district", "TEXT"), ("state_ut", "TEXT"), ("capability", "TEXT"),
     ("high", "INT"), ("medium", "INT"), ("unverified", "INT"),
     ("verified_supply", "INT"), ("total_signal", "INT"),
+    ("accepts_volunteers", "INT"), ("verified_beds", "INT"),
+]
+# District centroids (lat/lon) — nationwide distance from a volunteer origin.
+CENTROID_COLS = [
+    ("district_key", "TEXT"), ("nfhs_district", "TEXT"), ("state_ut", "TEXT"),
+    ("lat", "DOUBLE PRECISION"), ("lon", "DOUBLE PRECISION"),
 ]
 
 
@@ -98,7 +106,8 @@ def _load_table(cur, table: str, cols: list[tuple[str, str]], csv_path: Path) ->
 def main() -> None:
     with _connect() as conn, conn.cursor() as cur:
         cur.execute("CREATE SCHEMA IF NOT EXISTS mission")
-        n1 = _load_table(cur, "district_base", DISTRICT_COLS, CACHE / "district_base.csv")
+        district_cols = _district_cols_from_header(CACHE / "district_base.csv")   # all 109 NFHS + counts
+        n1 = _load_table(cur, "district_base", district_cols, CACHE / "district_base.csv")
         n2 = _load_table(cur, "reachability", REACH_COLS, CACHE / "reachability_patna.csv")
         cur.execute("CREATE INDEX ON mission.district_base (nfhs_district)")
         cur.execute("CREATE INDEX ON mission.reachability (district_key)")
@@ -124,6 +133,14 @@ def main() -> None:
             print(f"loaded mission.district_capability: {n4} rows")
         else:
             print("district_capability.csv not found — skipping (run data/geo_resolve.py)")
+
+        cen_csv = CACHE / "district_centroids.csv"
+        if cen_csv.exists():
+            n5 = _load_table(cur, "district_centroids", CENTROID_COLS, cen_csv)
+            cur.execute("CREATE INDEX ON mission.district_centroids (district_key)")
+            print(f"loaded mission.district_centroids: {n5} rows")
+        else:
+            print("district_centroids.csv not found — skipping (run data/geo_resolve.py)")
 
         _provision_app_schema(cur)
         conn.commit()

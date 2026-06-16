@@ -21,7 +21,8 @@ from mission_core.burden import INTERVENTION_INDICATORS
 from mission_core.chain import rank_districts as _rank, INTERVENTION_SUPPLY_COLUMN
 from mission_core.sensitivity import sweep as _sweep, COEFFICIENTS
 from mission_core.claims import CAPABILITIES, CAPABILITY_LABELS
-from mission_core.coverage_view import coverage_by_geography as _coverage, coverage_summary
+from mission_core.coverage_view import coverage_by_geography as _coverage, coverage_summary, optimize as _optimize
+from mission_core.geo_names import list_origins, DEFAULT_ORIGIN
 from .brief import build_brief
 
 
@@ -57,7 +58,7 @@ def _summarize(row: dict) -> dict:
 
 
 def _cite(c: dict) -> dict:
-    """One facility's CITED claim — name, source link + the underlying text, never paraphrased."""
+    """One facility's CITED claim — name, source link, contact, placement + the underlying text."""
     return {
         "facility_name": c.get("name") or None,
         "city": c.get("city") or None,
@@ -65,6 +66,10 @@ def _cite(c: dict) -> dict:
         "claim_confidence": c.get("claim_confidence"),
         "operator": c.get("operator"),
         "capability": c.get("capability"),
+        "accepts_volunteers": str(c.get("accepts_volunteers") or "0") in ("1", "1.0"),
+        "phone": c.get("phone") or None,
+        "website": c.get("website") or None,
+        "capacity_beds": c.get("capacity_beds") or None,
         "claimed_capability_text": c.get("capability_evidence") or None,
         "corroborating_procedure_text": c.get("procedure_evidence") or None,
         "matched_claim_terms": c.get("claim_terms"),
@@ -162,6 +167,40 @@ def coverage_by_geography(capability: str = "maternity", state: str = None,
         "note": ("supply is TRUST-WEIGHTED (corroborated claims count fully, claimed-only partly, "
                  "flag-only nothing unless count_unverified). 'no_claim_desert' = real gap; "
                  "'unverified_claims' = claims to verify, not confirmed coverage."),
+    }
+
+
+def optimize_deployment(capability: str = "maternity", state: str = None, origin: str = DEFAULT_ORIGIN,
+                        team_size: int = 6, days: int = 7, patients_per_volunteer_day: float = 20.0,
+                        count_unverified: bool = False, auto_days: bool = False, top_n: int = 8) -> dict:
+    """Deployment optimizer: for a team of `team_size` specialised in `capability`, based at `origin`
+    (a home city), rank districts in `state` (or all-India) by need-addressed-per-dollar = measured
+    DEMAND × unmet trust-weighted gap ÷ mission cost(travel-from-origin + per-diem). Returns per
+    district: demand (or honest 'supply-scarcity only'), verified supply, distance+cost FROM the
+    origin, days-to-meet-demand (fewer volunteers ⇒ more days), and # facilities that accept
+    volunteers. Use for 'I have N <capability> volunteers in <city>, where should we go?'."""
+    cap = {"maternal_health": "maternity"}.get(capability, capability)
+    if cap not in CAPABILITIES:
+        return {"error": f"unknown capability '{capability}'", "valid": CAPABILITIES}
+    if origin not in list_origins():
+        return {"error": f"unknown origin '{origin}'", "valid": list_origins()}
+    res = _optimize(cap, state=state, origin=origin, team_size=team_size, days=days,
+                    patients_per_volunteer_day=patients_per_volunteer_day,
+                    count_unverified=count_unverified, auto_days=auto_days, top_n=top_n)
+    return {
+        "capability": cap, "state": state or "all India", "origin": origin,
+        "team_size": team_size, "demand_available": res["demand_available"],
+        "demand_note": res["demand_note"],
+        "districts": [{
+            "rank": d["opt_rank"], "district": d["district"], "state": d["state"],
+            "demand": d["burden"] if d["demand_available"] else None,
+            "verified_supply": d["verified_supply"], "gap_classification": d["gap_classification"],
+            "distance_km": d["distance_km"], "travel_source": d["travel_source"],
+            "cost_total_usd": d["cost_total_usd"], "need_per_dollar": d["need_per_dollar"],
+            "days_to_meet_demand": d["days_to_meet_demand"], "accepts_volunteers": d["accepts_volunteers"],
+        } for d in res["districts"]],
+        "note": ("need is RELATIVE (no population in source data) with named adjustable assumptions; "
+                 "demand is NFHS-measured where available, else 'supply-scarcity only' (honest)."),
     }
 
 
@@ -267,6 +306,22 @@ TOOLS = [
             "team_size": {"type": "integer"}, "days": {"type": "integer"}},
             "required": ["intervention", "district"], "additionalProperties": False}}},
     {"type": "function", "function": {
+        "name": "optimize_deployment",
+        "description": "Deployment optimizer for a volunteer team: given a capability (the team's "
+                       "specialisation), team size, and home-base origin city, rank districts in a "
+                       "state (or all-India) by need-addressed-per-dollar — measured demand × unmet "
+                       "gap ÷ cost(travel-from-origin + per-diem). Returns distance/cost FROM the "
+                       "origin, days-to-meet-demand, and facilities that accept volunteers. Use for "
+                       "'I have N <capability> volunteers in <city>, where should we deploy?'.",
+        "parameters": {"type": "object", "properties": {
+            "capability": {"type": "string", "enum": _CAPABILITY_ENUM},
+            "state": {"type": "string", "description": "State/UT to rank within; omit for all-India."},
+            "origin": {"type": "string", "description": "Home-base city the team travels from (e.g. 'Delhi', 'Patna (Bihar)')."},
+            "team_size": {"type": "integer"}, "days": {"type": "integer"},
+            "patients_per_volunteer_day": {"type": "number"},
+            "auto_days": {"type": "boolean", "description": "Set mission length to days-needed-to-meet-demand."}},
+            "required": ["capability"], "additionalProperties": False}}},
+    {"type": "function", "function": {
         "name": "get_district_facilities",
         "description": "The underlying facility RECORDS behind a district's supply for a capability: "
                        "each facility's NAME, a SOURCE link, its CLAIMED capability text + the "
@@ -306,6 +361,7 @@ TOOLS = [
 _DISPATCH = {
     "list_interventions": list_interventions,
     "coverage_by_geography": coverage_by_geography,
+    "optimize_deployment": optimize_deployment,
     "rank_districts": rank_districts_tool,
     "get_district_detail": get_district_detail,
     "get_district_facilities": get_district_facilities,

@@ -42,8 +42,12 @@ OUT_CSV = CACHE / "district_base.csv"
 UNMATCHED_CSV = CACHE / "unmatched_districts.csv"
 FACILITY_CLAIMS_CSV = CACHE / "facility_claims.csv"        # long: one row per resolved facility×capability
 DISTRICT_CAPABILITY_CSV = CACHE / "district_capability.csv"  # long: one row per district×capability
+DISTRICT_CENTROIDS_CSV = CACHE / "district_centroids.csv"   # district_key -> lat/lon (nationwide distance)
 _TEXT_COLS = ("specialties", "description", "capability", "procedure", "equipment")
-_PROV_COLS = ("name", "city", "pincode", "source_urls")     # provenance (citations) — may be absent in legacy CSV
+# provenance + supply-magnitude + placement/contact columns carried per facility (absent in legacy CSV)
+_PROV_COLS = ("name", "city", "pincode", "source_urls", "capacity_beds", "number_doctors",
+              "accepts_volunteers", "organization_type", "facility_type", "phone", "website",
+              "year_established")
 
 
 def _first_url(source_urls: str) -> str:
@@ -144,6 +148,33 @@ def _base_row(nd: dict, agg: dict) -> dict:
     return row
 
 
+# --------------------------------------------------------------------------- centroids
+def _district_centroids(nfhs_by_key: dict) -> list[dict]:
+    """Centroid (lat, lon) per NFHS district, from the cached ADM2 polygons — used for nationwide
+    straight-line distance from a volunteer origin to any district (incl. zero-facility deserts)."""
+    from shapely.geometry import shape
+    fc = fetch_india_districts()
+    out, seen = [], set()
+    for feat in fc.get("features", []):
+        props = feat.get("properties", {})
+        pname = props.get("shapeName") or props.get("DISTRICT") or props.get("district") or ""
+        pkey = normalize_name(pname)
+        nd = nfhs_by_key.get(pkey) or (nfhs_by_key.get(DISTRICT_ALIASES[pkey]) if pkey in DISTRICT_ALIASES else None)
+        if nd is None:
+            continue
+        dkey = normalize_name(nd["district_name"])
+        if dkey in seen:
+            continue
+        try:
+            c = shape(feat["geometry"]).centroid
+        except Exception:
+            continue
+        seen.add(dkey)
+        out.append({"district_key": dkey, "nfhs_district": nd["district_name"].strip(),
+                    "state_ut": nd["state_ut"].strip(), "lat": round(c.y, 5), "lon": round(c.x, 5)})
+    return out
+
+
 # --------------------------------------------------------------------------- resolve
 def resolve(force_fetch: bool = False) -> dict:
     facilities, has_text = load_facilities()
@@ -157,7 +188,14 @@ def resolve(force_fetch: bool = False) -> dict:
     # 4. point-in-polygon each facility; classify its claim for EVERY capability; aggregate per
     #    polygon district × capability.
     def _new_caps():
-        return {c: {"high": 0, "medium": 0, "unverified": 0} for c in CAPABILITIES}
+        # per capability: grade counts + (for VERIFIED facilities) volunteer-accepting count + beds
+        return {c: {"high": 0, "medium": 0, "unverified": 0, "accepts": 0, "beds": 0} for c in CAPABILITIES}
+
+    def _num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return 0.0
 
     resolved, unresolved = 0, 0
     supply_by_poly: dict[str, dict] = {}
@@ -179,14 +217,23 @@ def resolve(force_fetch: bool = False) -> dict:
         elif fac["operator"] == "private":
             agg["private"] += 1
 
+        fac_accepts = int(_num(fac.get("accepts_volunteers")))
+        fac_beds = _num(fac.get("capacity_beds"))
         prov = {"name": fac.get("name", "") or "", "city": fac.get("city", "") or "",
                 "pincode": fac.get("pincode", "") or "", "source_url": _first_url(fac.get("source_urls", "")),
-                "operator": fac.get("operator", "") or "", "unique_id": fac.get("unique_id", "")}
+                "operator": fac.get("operator", "") or "", "unique_id": fac.get("unique_id", ""),
+                "capacity_beds": fac.get("capacity_beds", "") or "", "number_doctors": fac.get("number_doctors", "") or "",
+                "accepts_volunteers": fac_accepts, "organization_type": fac.get("organization_type", "") or "",
+                "facility_type": fac.get("facility_type", "") or "", "phone": fac.get("phone", "") or "",
+                "website": fac.get("website", "") or ""}
         for cap in CAPABILITIES:
             claim = classify_claim(fac, cap)
             conf = claim["confidence"]
             if conf in ("high", "medium", "unverified"):
                 agg["caps"][cap][conf] += 1
+                if conf in ("high", "medium"):          # verified supply → count beds + volunteer-accepting
+                    agg["caps"][cap]["accepts"] += fac_accepts
+                    agg["caps"][cap]["beds"] += fac_beds
                 facilities_resolved.append({
                     **prov, "poly_key": key, "capability": cap, "claim_confidence": conf,
                     "claim_terms": "; ".join(claim["claim_terms"]),
@@ -250,6 +297,9 @@ def resolve(force_fetch: bool = False) -> dict:
         claim_rows.append({
             "unique_id": fr["unique_id"], "name": fr["name"], "city": fr["city"], "pincode": fr["pincode"],
             "source_url": fr["source_url"], "operator": fr["operator"],
+            "capacity_beds": fr["capacity_beds"], "number_doctors": fr["number_doctors"],
+            "accepts_volunteers": fr["accepts_volunteers"], "organization_type": fr["organization_type"],
+            "facility_type": fr["facility_type"], "phone": fr["phone"], "website": fr["website"],
             "district_key": normalize_name(nd["district_name"]),
             "nfhs_district": nd["district_name"].strip(), "state_ut": nd["state_ut"].strip(),
             "capability": fr["capability"], "claim_confidence": fr["claim_confidence"],
@@ -270,18 +320,25 @@ def resolve(force_fetch: bool = False) -> dict:
             cc = agg["caps"][cap]
             row = dc.setdefault((dkey, cap), {"district_key": dkey,
                 "nfhs_district": nd["district_name"].strip(), "state_ut": nd["state_ut"].strip(),
-                "capability": cap, "high": 0, "medium": 0, "unverified": 0})
+                "capability": cap, "high": 0, "medium": 0, "unverified": 0,
+                "accepts_volunteers": 0, "verified_beds": 0})
             row["high"] += cc["high"]; row["medium"] += cc["medium"]; row["unverified"] += cc["unverified"]
+            row["accepts_volunteers"] += cc["accepts"]; row["verified_beds"] += cc["beds"]
     for d in nfhs_with_no_supply:                       # zero-supply districts = candidate deserts
         dkey = normalize_name(d["district_name"])
         for cap in CAPABILITIES:
             dc.setdefault((dkey, cap), {"district_key": dkey, "nfhs_district": d["district_name"].strip(),
-                "state_ut": d["state_ut"].strip(), "capability": cap, "high": 0, "medium": 0, "unverified": 0})
+                "state_ut": d["state_ut"].strip(), "capability": cap, "high": 0, "medium": 0,
+                "unverified": 0, "accepts_volunteers": 0, "verified_beds": 0})
     dc_rows = []
     for row in dc.values():
         row["verified_supply"] = row["high"] + row["medium"]
         row["total_signal"] = row["high"] + row["medium"] + row["unverified"]
+        row["verified_beds"] = int(round(row["verified_beds"]))
         dc_rows.append(row)
+
+    # district centroids (from the cached ADM2 polygons) → nationwide distance for the optimizer
+    centroid_rows = _district_centroids(nfhs_by_key)
 
     # 6. write outputs
     with OUT_CSV.open("w", newline="") as f:
@@ -299,6 +356,10 @@ def resolve(force_fetch: bool = False) -> dict:
         with DISTRICT_CAPABILITY_CSV.open("w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=list(dc_rows[0].keys()))
             w.writeheader(); w.writerows(dc_rows)
+    if centroid_rows:
+        with DISTRICT_CENTROIDS_CSV.open("w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=list(centroid_rows[0].keys()))
+            w.writeheader(); w.writerows(centroid_rows)
 
     stats = {
         "facilities_total": len(facilities),
@@ -311,8 +372,10 @@ def resolve(force_fetch: bool = False) -> dict:
         "nfhs_districts_with_zero_supply": len(nfhs_with_no_supply),
         "facility_capability_claims": len(claim_rows),
         "district_capability_rows": len(dc_rows),
+        "district_centroids": len(centroid_rows),
     }
-    return {"stats": stats, "rows": rows_out, "claim_rows": claim_rows, "dc_rows": dc_rows}
+    return {"stats": stats, "rows": rows_out, "claim_rows": claim_rows, "dc_rows": dc_rows,
+            "centroid_rows": centroid_rows}
 
 
 if __name__ == "__main__":

@@ -31,6 +31,70 @@ INTERVENTION_INDICATORS = {
 }
 
 
+# Per-CAPABILITY demand indicators (the optimizer's "patient need"), wired to real NFHS-5 columns.
+# HONESTY GRADIENT: capabilities with no NFHS proxy are None → demand_available=False (ranked by
+# supply scarcity only, explicitly flagged). We never invent a need number.
+CAPABILITY_INDICATORS = {
+    "maternity": [
+        ("institutional_birth_5y_pct", "low_is_worse"),
+        ("mothers_who_had_at_least_4_anc_visits_lb5y_pct", "low_is_worse"),
+        ("births_attended_by_skilled_hp_5y_10_pct", "low_is_worse"),
+        ("all_w15_49_who_are_anaemic_pct", "high_is_worse"),
+    ],
+    "oncology": [   # low cancer-screening coverage = high unmet cancer-care need
+        ("women_age_30_49_years_ever_undergone_a_cervical_screen_pct", "low_is_worse"),
+        ("women_age_30_49_years_ever_undergone_a_breast_exam_pct", "low_is_worse"),
+        ("women_age_30_49_years_ever_undergone_an_oral_cancer_exam_pct", "low_is_worse"),
+    ],
+    "icu": [        # NCD prevalence = critical-care demand
+        ("w15_plus_with_high_bp_sys_gte_140_mmhg_and_or_dia_gte_90_mm_pct", "high_is_worse"),
+        ("m15_plus_with_high_bp_sys_gte_140_mmhg_and_or_dia_gte_90_mm_pct", "high_is_worse"),
+        ("w15_plus_with_high_or_very_high_gt_140_mg_dl_blood_sugar_or_pct", "high_is_worse"),
+        ("m15_plus_with_high_or_very_high_gt_140_mg_dl_blood_sugar_or_pct", "high_is_worse"),
+    ],
+    "nicu": [       # PROXY (weak, labeled): unsafe delivery + child undernutrition
+        ("institutional_birth_5y_pct", "low_is_worse"),
+        ("child_u5_who_are_underweight_weight_for_age_18_pct", "high_is_worse"),
+        ("child_u5_who_are_wasted_weight_for_height_18_pct", "high_is_worse"),
+    ],
+    "emergency": None,   # no NFHS demand proxy
+    "trauma": None,      # no NFHS demand proxy
+}
+DEMAND_NOTE = {"nicu": "proxy demand (unsafe-delivery + child undernutrition) — weak"}
+_CAPABILITY_ALIAS = {"maternal_health": "maternity"}
+
+
+def capability_demand(district_row: dict, capability: str) -> dict:
+    """Patient-need (demand) 0..1 for a capability in a district, from NFHS-5 — the honest signal the
+    optimizer matches against supply. demand_available=False where no NFHS proxy exists (emergency/
+    trauma) → caller ranks by supply scarcity and labels it. Mirrors burden_score's */(x) handling."""
+    cap = _CAPABILITY_ALIAS.get(capability, capability)
+    spec = CAPABILITY_INDICATORS.get(cap, None) if cap in CAPABILITY_INDICATORS else None
+    if spec is None:
+        return {"capability": cap, "score": None, "demand_available": False,
+                "confidence": "none", "indicators_used": 0, "indicators_total": 0,
+                "missing_indicators": [], "low_confidence_indicators": [],
+                "note": DEMAND_NOTE.get(cap, "no NFHS demand indicator — ranked by supply scarcity only")}
+    contributions, missing, low_conf = [], [], []
+    for col, direction in spec:
+        value, flag = parse_nfhs_value(district_row.get(col))
+        if flag == "suppressed":
+            missing.append(col); continue
+        if flag == "low_confidence":
+            low_conf.append(col)
+        c = _normalize(value, direction)
+        if c is not None:
+            contributions.append(c)
+    score = round(sum(contributions) / len(contributions), 4) if contributions else None
+    return {
+        "capability": cap, "score": score, "demand_available": score is not None,
+        "indicators_used": len(contributions), "indicators_total": len(spec),
+        "missing_indicators": missing, "low_confidence_indicators": low_conf,
+        "confidence": _confidence(len(contributions), len(spec), low_conf),
+        "note": DEMAND_NOTE.get(cap),
+    }
+
+
 def parse_nfhs_value(raw):
     """
     Normalize a raw NFHS cell -> (value, flag), flag in {None,'suppressed','low_confidence'}.
