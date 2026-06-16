@@ -819,7 +819,8 @@ def build_ranking_data():
 # ---------------------------------------------------------------------------
 
 def generate_html(nodes, edges, qa_data, rankings, map_points=None,
-                  state_rollup_data=None, claim_evidence=None, ranking_data=None):
+                  state_rollup_data=None, claim_evidence=None, ranking_data=None,
+                  districts=None, supply=None, coverage_by_district=None):
     if map_points is None:
         map_points = []
     if state_rollup_data is None:
@@ -828,6 +829,12 @@ def generate_html(nodes, edges, qa_data, rankings, map_points=None,
         claim_evidence = {}
     if ranking_data is None:
         ranking_data = {}
+    if districts is None:
+        districts = []
+    if supply is None:
+        supply = {}
+    if coverage_by_district is None:
+        coverage_by_district = {}
 
     category_dist = {}
     for n in nodes:
@@ -842,7 +849,8 @@ def generate_html(nodes, edges, qa_data, rankings, map_points=None,
     top10_display = [(title_map.get(nid, nid), count) for nid, count in top_referenced]
 
     # Build hierarchy data for the reasoning chain
-    hierarchy_data = _build_hierarchy(nodes, rankings, ranking_data)
+    hierarchy_data = _build_hierarchy(nodes, rankings, ranking_data, districts, supply,
+                                      coverage_by_district)
 
     # Extract unique states from Geography nodes for the Geo dropdown
     all_states = sorted(set(
@@ -900,13 +908,145 @@ def _ranking_hierarchy_children(ranking_data, fallback_top_ranked):
     return [{"title": "Top Ranked Districts", "children": fallback_top_ranked[:15]}]
 
 
-def _build_hierarchy(nodes, rankings, ranking_data=None):
-    """Build reasoning-chain hierarchy structure."""
+def _build_hierarchy(nodes, rankings, ranking_data=None, districts=None, supply=None,
+                     coverage_by_district=None):
+    """Build reasoning-chain hierarchy structure with metrics per item."""
+    if districts is None:
+        districts = []
+    if supply is None:
+        supply = {}
+    if coverage_by_district is None:
+        coverage_by_district = {}
+
     node_map = {n["id"]: n for n in nodes}
 
+    # Pre-compute district metrics for enrichment
+    district_metrics = {}
+    for d in districts:
+        key = d["district_name"].lower()
+        burden = compute_burden(d, "maternal_health")
+        sup = supply.get(key, {"total": 0, "public": 0, "private": 0, "maternal": 0})
+        cov = coverage_by_district.get(key, {}).get("maternity", {})
+        district_metrics[key] = {
+            "burden": round(burden, 3) if burden else None,
+            "facilities": sup.get("total", 0),
+            "maternal_fac": sup.get("maternal", 0),
+            "gap": cov.get("gc", ""),
+            "desert": cov.get("ds", 0),
+        }
+
+    # Compute aggregate metrics per capability
+    cap_metrics = {}
+    for cap in CAPABILITIES:
+        confirmed = sum(1 for d in coverage_by_district.values()
+                       if d.get(cap, {}).get("gc") == "confirmed_coverage")
+        deserts = sum(1 for d in coverage_by_district.values()
+                     if d.get(cap, {}).get("gc") == "no_claim_desert")
+        cap_metrics[cap] = f"{confirmed} confirmed, {deserts} deserts"
+
     def items_for_cat(cat, level=None):
-        return [{"id": n["id"], "title": n["title"]}
-                for n in nodes if n["category"] == cat and (level is None or n["level"] == level)]
+        items = []
+        for n in nodes:
+            if n["category"] != cat or (level is not None and n["level"] != level):
+                continue
+            item = {"id": n["id"], "title": n["title"]}
+            # Attach metrics based on node type
+            if cat == "Geography" and n["level"] == 2:
+                name_part = n["title"].split(",")[0].strip().lower()
+                dm = district_metrics.get(name_part)
+                if dm and dm["burden"]:
+                    item["metric"] = f"burden: {dm['burden']} · {dm['facilities']} fac"
+                    if dm["gap"]:
+                        item["metric"] += f" · {dm['gap'].replace('_', ' ')}"
+            elif cat == "Verification" and n["level"] == 2:
+                cap_key = n["title"].lower()
+                if cap_key in cap_metrics:
+                    item["metric"] = cap_metrics[cap_key]
+            elif cat == "Supply" and n["level"] == 3:
+                pass  # title already has counts
+            elif cat == "Health Burden" and n["level"] == 1:
+                intv_key = n["title"].lower().replace(" ", "_")
+                ranked = rankings.get(intv_key, [])
+                if ranked:
+                    item["metric"] = f"top: {ranked[0][0]} ({ranked[0][1]:.3f})"
+            items.append(item)
+        return items
+
+    # Intervention items with top district
+    intervention_items = items_for_cat("Health Burden", 1)
+
+    # Indicator items with aggregate stats
+    indicator_items = []
+    for n in nodes:
+        if n["category"] == "Health Burden" and n["level"] == 3:
+            item = {"id": n["id"], "title": n["title"]}
+            # Compute mean across all districts
+            col_name = n["id"].replace("MMD-IND-", "")
+            vals = [d.get(col_name) for d in districts if d.get(col_name) is not None]
+            if vals:
+                avg = sum(vals) / len(vals)
+                item["metric"] = f"mean: {avg:.1f}% · n={len(vals)}"
+            indicator_items.append(item)
+
+    # Capability items
+    cap_items = items_for_cat("Verification", 2)
+
+    # Claim grade items with counts
+    grade_items = []
+    grade_counts = {"high": 0, "medium": 0, "unverified": 0, "none": 0}
+    for d_cov in coverage_by_district.values():
+        mat = d_cov.get("maternity", {})
+        grade_counts["high"] += mat.get("h", 0)
+        grade_counts["medium"] += mat.get("m", 0)
+        grade_counts["unverified"] += mat.get("u", 0)
+    for n in nodes:
+        if n["category"] == "Verification" and n["level"] == 3:
+            item = {"id": n["id"], "title": n["title"]}
+            grade_key = n["id"].replace("MMD-GRD-", "")
+            if grade_key in grade_counts:
+                item["metric"] = f"{grade_counts[grade_key]} facilities (maternity)"
+            grade_items.append(item)
+
+    # Gap classification items with counts
+    gap_items = []
+    gap_counts = {"confirmed_coverage": 0, "unverified_claims": 0, "no_claim_desert": 0}
+    for d_cov in coverage_by_district.values():
+        gc = d_cov.get("maternity", {}).get("gc", "")
+        if gc in gap_counts:
+            gap_counts[gc] += 1
+    for n in nodes:
+        if n["category"] == "Analysis" and n["level"] == 3:
+            item = {"id": n["id"], "title": n["title"]}
+            gap_key = n["id"].replace("MMD-GAP-", "")
+            if gap_key in gap_counts:
+                item["metric"] = f"{gap_counts[gap_key]} districts (maternity)"
+            gap_items.append(item)
+
+    # Cost model items (already have values in title)
+    cost_items = items_for_cat("Cost Model", 3)
+
+    # Reachability
+    stg_item = {"id": "MMD-STG-patna", "title": "Patna (Staging City)",
+                "metric": f"hub for {len(districts)} districts"}
+
+    # Data provenance with row counts
+    source_metrics = {
+        "nfhs5": f"{len(districts)} districts",
+        "facilities": f"{sum(s.get('total', 0) for s in supply.values())} facility clusters",
+        "india_post": "165K PIN codes",
+        "facility_text": "9,964 text records",
+    }
+    source_items = []
+    for n in nodes:
+        if n["category"] == "Data Provenance" and n["level"] == 4:
+            item = {"id": n["id"], "title": n["title"]}
+            src_key = n["id"].replace("MMD-SRC-", "")
+            if src_key in source_metrics:
+                item["metric"] = source_metrics[src_key]
+            source_items.append(item)
+
+    # Workflow items with descriptions
+    wf_items = items_for_cat("User Workflow")
 
     top_ranked = []
     for intv, ranked in rankings.items():
@@ -919,30 +1059,30 @@ def _build_hierarchy(nodes, rankings, ranking_data=None):
 
     hierarchy = [
         {"title": "1. Burden Assessment", "color": "#f85149", "children": [
-            {"title": "Interventions", "children": items_for_cat("Health Burden", 1)},
-            {"title": "NFHS-5 Indicators", "children": items_for_cat("Health Burden", 3)},
+            {"title": "Interventions", "children": intervention_items},
+            {"title": "NFHS-5 Indicators", "children": indicator_items},
         ]},
         {"title": "2. Supply Verification", "color": "#d29922", "children": [
-            {"title": "Capabilities", "children": items_for_cat("Verification", 2)},
-            {"title": "Claim Grades", "children": items_for_cat("Verification", 3)},
+            {"title": "Capabilities", "children": cap_items},
+            {"title": "Claim Grades", "children": grade_items},
         ]},
         {"title": "3. Coverage Gap Analysis", "color": "#e3b341", "children": [
-            {"title": "Gap Classifications", "children": items_for_cat("Analysis", 3)},
+            {"title": "Gap Classifications", "children": gap_items},
         ]},
         {"title": "4. Reachability", "color": "#58a6ff", "children": [
-            {"title": "Staging City", "children": [{"id": "MMD-STG-patna", "title": "Patna (Staging City)"}]},
+            {"title": "Staging City", "children": [stg_item]},
         ]},
         {"title": "5. Cost Model", "color": "#bc8cff", "children": [
-            {"title": "Assumptions", "children": items_for_cat("Cost Model", 3)},
+            {"title": "Assumptions", "children": cost_items},
         ]},
         {"title": "6. Impact Ranking (Maternal · Patna)", "color": "#58a6ff", "children":
             _ranking_hierarchy_children(ranking_data, top_ranked)
         },
         {"title": "7. Planner Workflow", "color": "#a371f7", "children": [
-            {"title": "Decision Tools", "children": items_for_cat("User Workflow")},
+            {"title": "Decision Tools", "children": wf_items},
         ]},
         {"title": "8. Data Provenance", "color": "#8b949e", "children": [
-            {"title": "Sources", "children": items_for_cat("Data Provenance", 4)},
+            {"title": "Sources", "children": source_items},
         ]},
     ]
     return hierarchy
@@ -970,10 +1110,11 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sa
 .main{{position:fixed;top:48px;left:0;right:0;bottom:0;}}
 .tab-content{{display:none;width:100%;height:100%;position:relative;}}
 .tab-content.active{{display:block;}}
-.map-controls{{position:absolute;top:12px;left:12px;z-index:10;display:flex;gap:6px;flex-wrap:wrap;}}
+.map-controls{{position:absolute;top:12px;right:12px;z-index:10;display:flex;gap:6px;flex-wrap:wrap;}}
 .map-controls select,.map-controls button{{background:var(--bg2);border:1px solid var(--border);color:var(--text);padding:6px 10px;border-radius:5px;font-size:11px;cursor:pointer;}}
 .map-controls button:hover{{background:var(--bg3);}}
 .map-state{{fill:var(--bg3);stroke:var(--border);stroke-width:0.5;transition:fill 0.2s,opacity 0.3s;}}
+.map-outline{{fill:none;stroke:var(--text2);stroke-width:1.8;pointer-events:none;}}
 .map-state:hover{{fill:var(--bg4);}}
 .map-state.dimmed{{opacity:0.25;}}
 .map-state.highlighted{{fill:var(--bg4);stroke:var(--blue);stroke-width:1.2;opacity:1;}}
@@ -1152,6 +1293,7 @@ function initMap(){{
   d3.json('https://raw.githubusercontent.com/geohacker/india/master/state/india_state.geojson').then(function(india){{
     mapG.append('g').attr('id','stateLayer').selectAll('path').data(india.features).join('path')
       .attr('d',path).attr('class','map-state');
+    mapG.append('path').datum({{type:'FeatureCollection',features:india.features}}).attr('d',path).attr('class','map-outline');
 
     markers=mapG.append('g').attr('id','markerLayer').selectAll('circle').data(mapPoints).join('circle')
       .attr('class','map-marker')
@@ -1423,7 +1565,10 @@ function initHierarchy(){{
     (section.children||[]).forEach(function(sub){{
       html+='<div class="hier-sub-header">'+sub.title+'</div>';
       (sub.children||[]).forEach(function(item){{
-        html+='<div class="hier-item" onclick="focusOnNode(\\''+item.id+'\\')">'+item.title+'</div>';
+        html+='<div class="hier-item" onclick="focusOnNode(\\''+item.id+'\\')">';
+        html+='<span>'+item.title+'</span>';
+        if(item.metric)html+='<span style="float:right;font-size:9px;color:var(--text2);font-weight:400">'+item.metric+'</span>';
+        html+='</div>';
       }});
     }});
     html+='</div></div>';
@@ -1601,7 +1746,8 @@ def main():
 
     print("Writing HTML...")
     html = generate_html(nodes, edges, qa_data, rankings, map_points,
-                         state_rollup_data, claim_evidence, ranking_data)
+                         state_rollup_data, claim_evidence, ranking_data,
+                         districts, supply, coverage_by_district)
     output_path = Path(__file__).parent / "output" / "knowledge_graph.html"
     output_path.parent.mkdir(exist_ok=True)
     output_path.write_text(html, encoding="utf-8")
