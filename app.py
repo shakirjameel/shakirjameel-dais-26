@@ -22,8 +22,8 @@ import streamlit as st
 from mission_core import data_access as da
 from mission_core.claims import CAPABILITY_LABELS, CAPABILITIES
 from mission_core.coverage import DESERT_SHADE_THRESHOLDS
-from mission_core.coverage_view import coverage_by_geography, coverage_summary, state_rollup
-from mission_core.geo_names import from_topo_state
+from mission_core.coverage_view import coverage_by_geography, coverage_summary, state_rollup, optimize
+from mission_core.geo_names import from_topo_state, list_origins, DEFAULT_ORIGIN
 from agent import tools as T
 
 STATE_ALL = "India — all states"
@@ -41,6 +41,9 @@ CAT_LABEL = {
     "claim_only": "Claims only — not verified", "no_claim_desert": "No-claim desert",
     "no_data": "No data yet",
 }
+# coloured dot per row (data_editor can't tint rows); the label text disambiguates the three greens
+CAT_DOT = {"strong": "🟢", "moderate": "🟢", "weaker": "🟢",
+           "claim_only": "🟡", "no_claim_desert": "🔴", "no_data": "⚪"}
 
 
 def _district_cat(r: dict) -> str:
@@ -78,6 +81,12 @@ st.markdown(f"""
   .hero h1 {{ margin:0; font-size:1.5rem; }}
   .hero p {{ margin:.25rem 0 0; color:var(--muted); font-size:.92rem; max-width:60rem; }}
   .crumb {{ color:var(--muted); font-size:.95rem; margin:.2rem 0 .4rem; }}
+  /* breadcrumb: one HTML line so labels share a baseline + spacing is exact */
+  .bc {{ font-size:1.05rem; line-height:1.7; }}
+  .bc a {{ color:var(--accent); text-decoration:none; }}
+  .bc a:hover {{ text-decoration:underline; }}
+  .bc .sep {{ margin:0 .5rem; color:var(--muted); }}
+  .bc .cur {{ color:var(--ink); font-weight:600; }}
   .card {{ background:var(--surface); border:1px solid var(--border); border-radius:12px;
            padding:14px 16px; margin-bottom:10px; }}
   .kpi {{ background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:14px 16px; }}
@@ -94,6 +103,10 @@ st.markdown(f"""
   .tile b {{ font-weight:500; }}
   a {{ color:var(--accent); }}
   .stButton button {{ border-radius:10px; border:1px solid var(--border); font-weight:500; }}
+  /* tertiary buttons (e.g. the breadcrumb link) are borderless link-style, not boxed */
+  .stButton button[kind="tertiary"], [data-testid="stBaseButton-tertiary"] {{
+    border:none !important; background:transparent !important; box-shadow:none !important;
+    padding:0 !important; color:var(--accent) !important; font-weight:600; font-size:1.05rem !important; }}
   /* top nav bar: title + logo live in the Streamlit header (same bar as the ⋮ menu) */
   [data-testid="stHeader"] {{ background:var(--surface); border-bottom:1px solid var(--border); height:3.5rem; }}
   [data-testid="stHeader"]::before {{
@@ -101,6 +114,23 @@ st.markdown(f"""
     display:flex; align-items:center; font-size:1.15rem; font-weight:600; letter-spacing:-0.01em;
     color:var(--ink); white-space:nowrap; pointer-events:none;
   }}
+  /* left filter panel: Databricks red with readable white text (inputs keep light bg + dark text) */
+  [data-testid="stSidebar"] {{ background: var(--accent); }}
+  [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
+  [data-testid="stSidebar"] label, [data-testid="stSidebar"] [data-testid="stWidgetLabel"],
+  [data-testid="stSidebar"] [data-testid="stWidgetLabel"] p,
+  [data-testid="stSidebar"] [data-testid="stMarkdownContainer"],
+  [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {{ color:#fff !important; }}
+  [data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+  [data-testid="stSidebar"] [data-testid="stCaptionContainer"] p {{ color:rgba(255,255,255,.85) !important; }}
+  [data-testid="stSidebar"] hr {{ border-color:rgba(255,255,255,.3) !important; }}
+  [data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"],
+  [data-testid="stSidebar"] [data-testid="stTooltipHoverTarget"] *,
+  [data-testid="stSidebar"] [data-testid="stTooltipIcon"],
+  [data-testid="stSidebar"] [data-testid="stTooltipIcon"] *
+    {{ color:#fff !important; fill:#fff !important; opacity:.9; }}
+  [data-testid="stSidebar"] .stButton button {{ background:#fff !important; color:var(--ink) !important;
+    border-color:rgba(255,255,255,.5) !important; }}
 </style>""", unsafe_allow_html=True)
 
 
@@ -156,6 +186,11 @@ def state_figure(st_nm, fill_cat):
 
 # ----------------------------------------------------------------------------- session sync
 ss = st.session_state
+# breadcrumb 'India' link (?nav=india) → back to the national view (set BEFORE the widget is built)
+if st.query_params.get("nav") == "india":
+    del st.query_params["nav"]
+    ss["state_select"] = STATE_ALL
+    ss["active_district"] = None
 # apply a pending state-dropdown sync (from a map click / list / tile) BEFORE the widget is built
 if "_pending_state" in ss:
     ss["state_select"] = ss.pop("_pending_state")
@@ -248,14 +283,16 @@ with st.sidebar:
 cap_label = CAPABILITY_LABELS.get(capability, capability)
 active_state = None if state_select == STATE_ALL else topo2our.get(state_select)
 
-# ----------------------------------------------------------------------------- intro line (title is in the nav bar)
-st.markdown(
-    f'<div class="hero"><p>Trust-weighted facility coverage for {_pill("pill-cap", cap_label)} across India — '
-    'telling real care deserts apart from data-poor regions. Every facility claim is graded against its own '
-    'text and cited with a source.</p></div>', unsafe_allow_html=True)
+# ----------------------------------------------------------------------------- intro line (rendered per view; title is in the nav bar)
+def intro():
+    st.markdown(
+        f'<div class="hero"><p>Trust-weighted facility coverage for {_pill("pill-cap", cap_label)} across India — '
+        'telling real care deserts apart from data-poor regions. Every facility claim is graded against its own '
+        'text and cited with a source.</p></div>', unsafe_allow_html=True)
 
 # ============================================================================= INDIA view
 if active_state is None:
+    intro()
     n_lit = sum(1 for r in roll if r["lit"])
     n_desert = sum(1 for r in roll if r["fill_category"] == "no_claim_desert")
     n_verified = sum(r["verified_facilities"] for r in roll)
@@ -277,25 +314,20 @@ if active_state is None:
                     f'<div class="l">states: no facility claims {cap_label}</div></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="kpi" style="margin-top:8px"><div class="n">{n_verified:,}</div>'
                     f'<div class="l">text-verified facilities</div></div>', unsafe_allow_html=True)
-        st.markdown("<div style='margin-top:10px' class='muted'>Drill into a state</div>", unsafe_allow_html=True)
-        worst = sorted([r for r in roll if r["lit"]],
-                       key=lambda r: (r["fill_category"] != "no_claim_desert", -(r["mean_desert_score"] or 0)))
-        for r in worst[:10]:
-            if st.button(f"{r['st_nm']}  ·  {CAT_LABEL[r['fill_category']].split('—')[0].strip()}",
-                         key=f"rail_{r['st_nm']}", width="stretch"):
-                go_to_state(r["st_nm"])
+        st.markdown("<div style='margin-top:10px' class='muted'>Click a state on the map, or pick one "
+                    "from the sidebar, to drill in.</div>", unsafe_allow_html=True)
 
 # ============================================================================= STATE view
 else:
     rows = coverage_by_geography(capability, active_state, count_unverified)
     summ = coverage_summary(rows)
     fill_cat = next((r["fill_category"] for r in roll if r["st_nm"] == state_select), "no_data")
-    cb, _ = st.columns([4, 1])
-    with cb:
-        bcol1, bcol2 = st.columns([1, 6])
-        if bcol1.button("‹ India", key="back_india"):
-            go_to_india()
-        bcol2.markdown(f'<div class="crumb">India › <b>{state_select}</b></div>', unsafe_allow_html=True)
+    # single-line breadcrumb on top: 'India' is a self-link (?nav=india) back to the map
+    st.markdown(
+        f'<div class="bc"><a href="?nav=india" target="_self">India</a>'
+        f'<span class="sep">›</span><span class="cur">{state_select}</span></div>',
+        unsafe_allow_html=True)
+    intro()   # description sits BELOW the breadcrumb
 
     head, mini = st.columns([3, 1])
     with mini:
@@ -310,34 +342,88 @@ else:
         k3.markdown(f'<div class="kpi"><div class="n">{summ["no_claim_desert"]}</div>'
                     f'<div class="l">no-claim deserts</div></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="muted" style="margin-top:8px">{summ["districts"]} districts · '
-                    f'{summ["verified_facilities"]} text-verified facilities for {cap_label}. '
-                    f'Click a district to see the facility records.</div>', unsafe_allow_html=True)
+                    f'{summ["verified_facilities"]} text-verified facilities for {cap_label}.</div>',
+                    unsafe_allow_html=True)
         st.markdown(_legend(), unsafe_allow_html=True)
 
-    # district tile grid (clickable → drill)
+    # district table — tick a row's Review checkbox to open its records; every column filter/sortable
     st.markdown("#### Districts")
-    cols = st.columns(4)
-    for i, r in enumerate(rows):
-        cat = _district_cat(r)
-        sub = (f'{r["verified_supply"]}/{r["total_facilities"]} verified'
-               if r["total_facilities"] else "no facilities")
-        if cat == "no_claim_desert":
-            sub = "no facility claims it"
-        with cols[i % 4]:
-            st.markdown(f'<div class="tile" style="background:{CAT_COLOR[cat]}33;border-color:{CAT_COLOR[cat]}">'
-                        f'<b>{r["district"]}</b><br><span class="muted">{sub} · score {r["desert_score"]}</span></div>',
-                        unsafe_allow_html=True)
-            if st.button("Open ›", key=f"tile_{r['district']}", width="stretch"):
-                open_district(r["district"])
+    st.caption("Tick a row’s **Review** checkbox to open its facility records. Click any header to sort; "
+               "use the filters below to narrow the list.")
 
-    # ranked table (reuse)
-    with st.expander("Ranked district table", expanded=False):
-        st.dataframe(pd.DataFrame([{
-            "rank": r["rank"], "district": r["district"], "gap": CAT_LABEL[_district_cat(r)],
-            "verified": r["verified_supply"], "unverified": r["unverified"],
-            "trust_ratio": r["trust_ratio"], "facilities": r["total_facilities"],
-            "desert_score": r["desert_score"],
-        } for r in rows]), width="stretch", hide_index=True, height=300)
+    # ---- filter & search (every column) ----
+    cov_present = [CAT_LABEL[c] for c in CAT_ORDER if any(_district_cat(r) == c for r in rows)]
+    maxv = max((r["verified_supply"] for r in rows), default=0)
+    maxu = max((r["unverified"] for r in rows), default=0)
+    maxf = max((r["total_facilities"] for r in rows), default=0)
+    dscores = [r["desert_score"] for r in rows] or [0.0]
+    ds_lo, ds_hi = round(min(dscores), 4), round(max(dscores), 4)
+
+    def _range(col, label, lo, hi, step):
+        if hi <= lo:
+            return (lo, hi)              # nothing to filter — skip the slider
+        return col.slider(label, lo, hi, (lo, hi), step=step)
+
+    with st.expander("Filter & search", expanded=False):
+        r1 = st.columns(2)
+        f_district = r1[0].text_input("District contains", key="f_district").strip().lower()
+        f_cov = r1[1].multiselect("Coverage", cov_present, default=cov_present, key="f_cov")
+        r2 = st.columns(3)
+        rng_v = _range(r2[0], "Verified", 0, int(maxv), 1)
+        rng_u = _range(r2[1], "Unverified", 0, int(maxu), 1)
+        rng_f = _range(r2[2], "Facilities", 0, int(maxf), 1)
+        r3 = st.columns(2)
+        rng_t = r3[0].slider("Trust ratio", 0.0, 1.0, (0.0, 1.0), step=0.05)
+        rng_d = _range(r3[1], "Desert score", ds_lo, ds_hi, 0.01)
+
+    def _passes(r):
+        if f_district and f_district not in r["district"].lower():
+            return False
+        if f_cov and CAT_LABEL[_district_cat(r)] not in f_cov:
+            return False
+        if not rng_v[0] <= r["verified_supply"] <= rng_v[1]:
+            return False
+        if not rng_u[0] <= r["unverified"] <= rng_u[1]:
+            return False
+        if not rng_f[0] <= r["total_facilities"] <= rng_f[1]:
+            return False
+        tr = r["trust_ratio"] if r["trust_ratio"] is not None else 0.0
+        if not rng_t[0] <= tr <= rng_t[1]:
+            return False
+        if not rng_d[0] <= r["desert_score"] <= rng_d[1]:
+            return False
+        return True
+
+    frows = [r for r in rows if _passes(r)]
+    if not frows:
+        st.info("No districts match the current filters.")
+        ss["active_district"] = None
+    else:
+        dft = pd.DataFrame([{
+            "Review": False, "District": r["district"],
+            "Coverage": f'{CAT_DOT[_district_cat(r)]} {CAT_LABEL[_district_cat(r)]}',
+            "Verified": r["verified_supply"], "Unverified": r["unverified"],
+            "Facilities": r["total_facilities"], "Trust ratio": r["trust_ratio"],
+            "Desert score": r["desert_score"],
+        } for r in frows])
+        # key embeds state+capability+filter signature so checkbox state resets when the rows change
+        fsig = abs(hash(f"{f_district}|{tuple(sorted(f_cov))}|{rng_v}|{rng_u}|{rng_f}|{rng_t}|{rng_d}|{len(frows)}"))
+        dkey = f"deditor_{state_select}_{capability}_{fsig}"
+        tbl_h = min(600, (len(dft) + 1) * 35 + 3)   # size to rows (~35px each + header); cap → scroll
+        edited = st.data_editor(
+            dft, key=dkey, hide_index=True, width="stretch", height=tbl_h,
+            disabled=["District", "Coverage", "Verified", "Unverified", "Facilities",
+                      "Trust ratio", "Desert score"],
+            column_config={
+                "Review": st.column_config.CheckboxColumn("Review", help="Open this district's records", width="small"),
+                "Trust ratio": st.column_config.NumberColumn("Trust ratio", format="%.2f"),
+                "Desert score": st.column_config.NumberColumn("Desert score", format="%.4f"),
+            })
+        checked = edited.loc[edited["Review"], "District"].tolist() if len(edited) else []
+        prev = ss.get("_prev_review", [])
+        new = [d for d in checked if d not in prev]          # most-recently-ticked wins (single drill)
+        ss["_prev_review"] = checked
+        ss["active_district"] = new[0] if new else (checked[0] if checked else None)
 
     # ----------------------- district drill (facility records + decisions) — single instance
     if ss.get("active_district"):
@@ -358,18 +444,26 @@ else:
             if claims:
                 st.markdown(f"**Facility evidence** — capability is a *claim to verify, not ground truth*. "
                             f"{len(claims)} record(s):")
+                n_accept = sum(1 for c in claims if str(c.get("accepts_volunteers") or "0") in ("1", "1.0"))
+                if n_accept:
+                    st.caption(f"🤝 {n_accept} of these explicitly **accept volunteers** (a placement target).")
                 for c in claims[:12]:
                     link = f' · <a href="{c["source_url"]}" target="_blank">source</a>' if c.get("source_url") else ""
+                    phone = f' · ☎ {c["phone"]}' if c.get("phone") else ""
+                    web = f' · <a href="{c["website"]}" target="_blank">site</a>' if c.get("website") else ""
+                    accepts = ' · <b>🤝 accepts volunteers</b>' if str(c.get("accepts_volunteers") or "0") in ("1", "1.0") else ""
+                    beds = f' · {c["capacity_beds"]} beds' if c.get("capacity_beds") else ""
                     cap_ev, proc_ev = c.get("capability_evidence") or "", c.get("procedure_evidence") or ""
                     st.markdown(
                         f'<div class="card">{_conf_pill(c["claim_confidence"])} &nbsp;<b>{c.get("name") or "(unnamed)"}</b>'
-                        f'<span class="muted"> · {c.get("city") or ""} · {c.get("operator") or ""}{link}</span>'
+                        f'<span class="muted"> · {c.get("city") or ""} · {c.get("operator") or ""}{beds}{accepts}{phone}{link}{web}</span>'
                         + (f'<br><b>claims:</b> “{cap_ev}”' if cap_ev else
                            '<br><b>claims:</b> <i>flag/specialty asserts it, but the facility’s own text doesn’t — unverified</i>')
                         + (f'<br><b>corroborated by:</b> “{proc_ev}”' if proc_ev else
                            ('<br><span class="muted">not corroborated by procedure/equipment text</span>' if cap_ev else ''))
                         + '</div>', unsafe_allow_html=True)
-                st.caption("Each line is the facility's own extracted text — cited with its source link.")
+                st.caption("Each line is the facility's own extracted text — cited with its source link, "
+                           "plus contact + whether it accepts volunteers (an actionable partner list).")
             else:
                 st.info("No facility even claims this capability here — a candidate care desert (or a data gap).")
 
@@ -409,61 +503,59 @@ else:
 # ============================================================================= deep-dive tabs
 st.divider()
 tab_opt, tab_workspace, tab_agent = st.tabs(
-    ["Deployment optimizer (maternal · Patna)", "My workspace", "Ask the copilot"])
+    ["🚑 Deployment optimizer", "My workspace", "Ask the copilot"])
 
 with tab_opt:
-    st.caption("Cost-per-impact ranking: which district does a volunteer team do the most good per "
-               "dollar from Patna — burden × trust-weighted gap ÷ mission cost. Available for maternity "
-               "(the capability with NFHS burden + road-reachability data).")
-    team_size = st.slider("Team size", 2, 20, ss.get("team_size", 6), key="team_size")
-    days = st.slider("Mission days", 1, 21, ss.get("days", 7), key="days")
-    res = T.rank_districts_tool("maternal_health", team_size=team_size, days=days, top_n=6,
-                                count_unverified=count_unverified)
-    conf, cand = res["confirmed_gaps"], res["candidate_gaps"]
-    if conf:
-        top = conf[0]
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Top confirmed pick", f"{top['district']}, {top['state']}")
-        c2.metric("Need addressed / $", f"{top['need_per_dollar']:.2e}")
-        c3.metric("Est. mission cost", f"${top['cost_total_usd']:,.0f}")
-    lo, ro = st.columns(2)
-    with lo:
-        st.markdown("**Confirmed gaps** — measured facility data")
-        for r in conf:
-            st.markdown(f'<div class="card"><b>#{r["rank"]} {r["district"]}, {r["state"]}</b><br>'
-                        f'<span class="muted">burden {r["burden_score"]} · gap {r["gap"]} · verified supply '
-                        f'{r["verified_maternal_supply"]} · {r["drive_hours"]}h / {r["distance_km"]}km · '
-                        f'${r["cost_total_usd"]:,.0f} · need/$ {r["need_per_dollar"]:.2e}</span></div>',
-                        unsafe_allow_html=True)
-    with ro:
-        st.markdown("**Candidate gaps** — no facility data; investigate")
-        for r in cand:
-            st.markdown(f'<div class="card"><b>#{r["rank"]} {r["district"]}, {r["state"]}</b><br>'
-                        f'<span class="muted">burden {r["burden_score"]} · gap {r["gap"]} · '
-                        f'{r["drive_hours"]}h / {r["distance_km"]}km · no facility data — verify on the ground</span></div>',
-                        unsafe_allow_html=True)
-    st.divider()
-    cr, cbf = st.columns(2)
-    with cr:
-        st.markdown("**Robustness** — does the #1 pick survive a cost-assumption sweep?")
-        coef = st.selectbox("Sweep", list(T.COEFFICIENTS), format_func=lambda k: T.COEFFICIENTS[k][2])
-        s = T.sensitivity_analysis("maternal_health", coef, team_size, days)
-        if s.get("error"):
-            st.warning(s["error"])
-        else:
-            st.success(s["verdict"])
-            st.line_chart(pd.DataFrame([{"value": p["value"], "need_per_$": p["top_metric"]}
-                                        for p in s["points"]]).set_index("value"))
-    with cbf:
-        st.markdown("**Mission brief** — cited one-pager for a confirmed pick")
-        bnames = [r["district"] for r in conf]
-        if bnames:
-            bpick = st.selectbox("District for brief", bnames, key="brief_pick")
-            brief = T.generate_brief("maternal_health", bpick, team_size, days).get("brief", "")
-            st.code(brief, language="text")
-            st.download_button("Download brief", brief, file_name=f"brief_{bpick}.txt")
-        else:
-            st.info("No confirmed-gap district to brief.")
+    scope = state_select if active_state else "all India"
+    st.caption(f"Match a team to need: for volunteers specialised in **{cap_label}**, based at a chosen "
+               f"home city, which districts in **{scope}** close the most measured patient need per "
+               "dollar? Need = demand × unmet trust-weighted gap; cost = travel-from-origin + per-diem. "
+               "Fewer volunteers ⇒ more days to meet demand.")
+    oc1, oc2, oc3 = st.columns(3)
+    origins = list_origins()
+    origin = oc1.selectbox("Volunteers based in", origins,
+                           index=origins.index(ss.get("opt_origin", DEFAULT_ORIGIN)) if ss.get("opt_origin", DEFAULT_ORIGIN) in origins else 0,
+                           key="opt_origin")
+    team_size = oc2.slider("Team size (volunteers)", 2, 30, ss.get("team_size", 6), key="team_size")
+    tput = oc3.number_input("Patients / volunteer / day", 1, 100, ss.get("opt_tput", 20), key="opt_tput")
+    auto_days = st.toggle("Auto: set mission length = days needed to meet demand", value=ss.get("opt_auto", False), key="opt_auto")
+    days = ss.get("days", 7)
+    if not auto_days:
+        days = st.slider("Mission days", 1, 30, ss.get("days", 7), key="days")
+
+    res = optimize(capability, state=active_state, origin=origin, team_size=team_size, days=days,
+                   patients_per_volunteer_day=tput, auto_days=auto_days,
+                   count_unverified=count_unverified, top_n=12)
+    if not res["demand_available"]:
+        st.warning(f"No NFHS demand indicator for **{cap_label}** — districts are ranked by **supply "
+                   "scarcity** only (honest: this is not a measured patient-need signal).")
+    ds = res["districts"]
+    if not ds:
+        st.info("No districts to rank for this selection.")
+    else:
+        top = ds[0]
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Top pick", f"{top['district']}, {top['state']}")
+        m2.metric("Need addressed / $", f"{top['need_per_dollar']:.2e}")
+        m3.metric(f"Est. cost (from {origin.split(' (')[0]})", f"${top['cost_total_usd']:,.0f}")
+        m4.metric("Days to meet demand", top["days_to_meet_demand"] or "—")
+        st.markdown(_legend(), unsafe_allow_html=True)
+        for r in ds:
+            cat = _district_cat(r)
+            cls = "pill-hi" if cat in ("strong", "moderate", "weaker") else "pill-med" if cat == "claim_only" else "pill-lo"
+            dist = f'{r["distance_km"]}km ({r["travel_source"]})' if r["distance_km"] is not None else "distance n/a"
+            dem = (f'demand {r["burden"]}' if r["demand_available"] else "supply-scarcity (no demand indicator)")
+            av = f' · 🤝 {r["accepts_volunteers"]} accept volunteers' if r["accepts_volunteers"] else ""
+            beds = f' · {r["verified_beds"]} verified beds' if r.get("verified_beds") else ""
+            st.markdown(
+                f'<div class="card"><b>#{r["opt_rank"]} {r["district"]}, {r["state"]}</b> &nbsp;'
+                f'{_pill(cls, CAT_LABEL[cat])}'
+                f'<br><span class="muted">{dem} · verified supply {r["verified_supply"]}{beds} · '
+                f'{dist} · ${r["cost_total_usd"]:,.0f} · need/$ {r["need_per_dollar"]:.2e} · '
+                f'~{r["days_to_meet_demand"]}d to meet demand{av}</span></div>', unsafe_allow_html=True)
+        st.caption("Cost coefficients (per-km, per-diem, surgeon-day, patients/volunteer/day, need-units) "
+                   "are named, adjustable assumptions — need is RELATIVE (the source data has no population "
+                   "denominator), shown honestly, never a fabricated absolute count.")
 
 with tab_workspace:
     st.caption("Everything you save — shortlist, review decisions, notes, scenarios — persisted across "

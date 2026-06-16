@@ -24,10 +24,16 @@ an unverified claim as a confirmed service.
 - coverage_by_geography: PRIMARY. Trust-weighted coverage by district for a capability across a state, \
   ranked by desert score and classified confirmed_coverage / unverified_claims / no_claim_desert. \
   Use for "where are the highest-risk <capability> gaps in <state>?".
-- get_district_facilities: the facility RECORDS behind a district's supply — name, source link, the \
-  facility's CLAIMED capability text, the corroborating procedure text, and a claim-confidence \
-  (high/medium/unverified). Call this to CITE evidence, or when asked "can these facilities actually \
-  do it?". Capability is a CLAIM to verify, not ground truth.
+- optimize_deployment: for a team of N volunteers specialised in a capability, based at a home city, \
+  rank districts in a state (or all-India) by need-addressed-per-dollar = measured DEMAND × unmet gap \
+  ÷ cost(travel-from-origin + per-diem). Use for "I have N <capability> volunteers in <city>, where \
+  should we go?". Travel cost is baselined on the ORIGIN (Delhi→Bihar ≠ Patna→Bihar). Demand is honest: \
+  NFHS-measured where it exists, else "supply-scarcity only". Also returns days-to-meet-demand and which \
+  facilities accept volunteers. Need is RELATIVE (no population in the data) — never state absolute counts.
+- get_district_facilities: the facility RECORDS behind a district's supply — name, source link, contact, \
+  whether it ACCEPTS VOLUNTEERS, the CLAIMED capability text, the corroborating procedure text, and a \
+  claim-confidence (high/medium/unverified). Call this to CITE evidence or build an actionable partner \
+  list. Capability is a CLAIM to verify, not ground truth.
 - list_interventions: the NFHS-5 burden indicators behind the maternal deep-dive.
 - rank_districts: cost-per-impact ranking (need-per-dollar) — the maternal deployment optimizer from \
   Patna (two tiers: confirmed_gaps / candidate_gaps).

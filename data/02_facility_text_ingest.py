@@ -65,7 +65,16 @@ SELECT
   substr(capability,   1, 600) AS capability,
   substr(procedure,    1, 600) AS procedure,
   substr(equipment,    1, 400) AS equipment,
-  substr(source_urls,  1, 300) AS source_urls
+  substr(source_urls,  1, 300) AS source_urls,
+  -- supply magnitude (winsorized: cap absurd outliers like 200000 beds; these are CLAIMS too)
+  CASE WHEN try_cast(capacity AS double) BETWEEN 1 AND 5000 THEN try_cast(capacity AS double) END AS capacity_beds,
+  CASE WHEN try_cast(numberDoctors AS double) BETWEEN 1 AND 500 THEN try_cast(numberDoctors AS double) END AS number_doctors,
+  -- VF placement + operational-readiness signals
+  CASE WHEN lower(cast(acceptsVolunteers AS string)) IN ('true','1','yes') THEN 1 ELSE 0 END AS accepts_volunteers,
+  organization_type, facilityTypeId AS facility_type,
+  substr(coalesce(officialPhone, phone_numbers), 1, 120) AS phone,
+  substr(coalesce(officialWebsite, websites), 1, 200) AS website,
+  yearEstablished AS year_established
 FROM {CATALOG}.{SCHEMA}.facilities
 WHERE latitude IS NOT NULL AND longitude IS NOT NULL AND {INDIA}
 """

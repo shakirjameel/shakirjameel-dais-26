@@ -20,12 +20,31 @@ class CostAssumptions:
     mission_days_default: int = 7
     surgeon_day_value_usd: float = 800.0    # opportunity cost of one lost operating day
     round_trip: bool = True
+    # capacity-to-serve (relative, since the provided data has NO population denominator — adjustable):
+    patients_per_volunteer_day: float = 20.0   # how many patients one volunteer handles per day
+    addressable_need_units: float = 4000.0     # notional patients in a MAX-need (need_index=1) district
 
     def as_dict(self):
         return asdict(self)
 
 
 DEFAULTS = CostAssumptions()
+
+
+def days_to_meet_demand(need_index: float, team_size: int,
+                        patients_per_volunteer_day: float = None,
+                        addressable_need_units: float = None) -> dict:
+    """Capacity-to-serve: a team of `team_size` at `patients_per_volunteer_day` clears a district's
+    (relative) need backlog in N days. Fewer volunteers ⇒ more days. Need is RELATIVE (no population
+    in the source data) so `addressable_need_units` is a named, adjustable scale — never a fabricated
+    absolute count. Returns {patients_needed, team_capacity_per_day, days}."""
+    tput = DEFAULTS.patients_per_volunteer_day if patients_per_volunteer_day is None else patients_per_volunteer_day
+    units = DEFAULTS.addressable_need_units if addressable_need_units is None else addressable_need_units
+    need = max(0.0, (need_index or 0.0)) * units
+    cap_per_day = max(1.0, team_size * tput)
+    import math
+    return {"patients_needed": int(round(need)), "team_capacity_per_day": int(cap_per_day),
+            "days": int(math.ceil(need / cap_per_day)) if need > 0 else 0}
 
 
 def mission_cost(distance_km: float, drive_hours: float,

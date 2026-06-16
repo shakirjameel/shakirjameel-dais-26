@@ -73,3 +73,33 @@ def from_topo_state(st_nm: str, our_states: list[str]) -> str | None:
         if STATE_ALIAS.get(n, n) == target:
             return s
     return None
+
+
+# Volunteer ORIGIN cities (where a team is based) -> (lat, lon). Used for travel cost: distance from
+# the team's home base to each candidate district. Keyed on topology `st_nm` (state capital), so the
+# optimizer can baseline cost by origin (e.g. Delhi → Bihar costs more than Patna → Bihar). Coords are
+# approximate state-capital centroids (adjustable). Patna is the legacy staging city (ORS-precomputed).
+ORIGINS = {
+    "Patna (Bihar)": (25.594, 85.138),
+    "Andhra Pradesh": (16.506, 80.648), "Arunachal Pradesh": (27.084, 93.605),
+    "Assam": (26.144, 91.736), "Bihar": (25.594, 85.138), "Chandigarh": (30.733, 76.779),
+    "Chhattisgarh": (21.251, 81.630), "Delhi": (28.614, 77.209), "Goa": (15.498, 73.828),
+    "Gujarat": (23.023, 72.572), "Haryana": (30.733, 76.779), "Himachal Pradesh": (31.105, 77.173),
+    "Jammu and Kashmir": (34.084, 74.797), "Jharkhand": (23.361, 85.310), "Karnataka": (12.972, 77.595),
+    "Kerala": (8.524, 76.937), "Ladakh": (34.153, 77.577), "Madhya Pradesh": (23.260, 77.413),
+    "Maharashtra": (19.076, 72.878), "Manipur": (24.817, 93.937), "Meghalaya": (25.579, 91.893),
+    "Mizoram": (23.726, 92.717), "Nagaland": (25.667, 94.117), "Odisha": (20.296, 85.825),
+    "Puducherry": (11.914, 79.812), "Punjab": (30.733, 76.779), "Rajasthan": (26.912, 75.787),
+    "Sikkim": (27.339, 88.606), "Tamil Nadu": (13.083, 80.270), "Telangana": (17.385, 78.487),
+    "Tripura": (23.831, 91.282), "Uttar Pradesh": (26.847, 80.947), "Uttarakhand": (30.317, 78.032),
+    "West Bengal": (22.573, 88.364),
+}
+DEFAULT_ORIGIN = "Patna (Bihar)"
+
+
+def origin_latlon(name: str) -> tuple | None:
+    return ORIGINS.get(name)
+
+
+def list_origins() -> list[str]:
+    return list(ORIGINS)

@@ -12,8 +12,11 @@ from mission_core.cost import mission_cost, CostAssumptions
 from mission_core.burden import parse_nfhs_value, burden_score
 from mission_core.coverage import (coverage_gap, supply_adequacy, trust_weighted_supply,
                                     gap_classification)
-from mission_core.coverage_view import coverage_by_geography, coverage_summary, state_rollup
+from mission_core.coverage_view import coverage_by_geography, coverage_summary, state_rollup, optimize
 from mission_core.coverage import state_fill_category
+from mission_core.cost import days_to_meet_demand
+from mission_core.reach import distance_from_origin, haversine_km
+from mission_core.burden import capability_demand
 from mission_core.geo_names import to_topo_state, list_topo_states
 from mission_core.data_access import load_districts
 from mission_core.impact import need_addressed_per_cost, people_reached
@@ -132,6 +135,33 @@ def test_state_rollup_covers_all_topo_states_and_marks_no_data():
     assert by["Kerala"]["lit"] and by["Kerala"]["fill_category"] != "no_data"
 
 
+# ---------- optimizer: capacity-to-serve, origin cost, demand-supply matching ----------
+def test_capability_demand_honesty():
+    d = load_districts()[0]
+    assert capability_demand(d, "emergency")["demand_available"] is False   # no NFHS proxy
+    assert capability_demand(d, "trauma")["demand_available"] is False
+    assert "maternity" == capability_demand(d, "maternal_health")["capability"]  # alias
+
+def test_days_to_meet_demand_scales_with_team():
+    few = days_to_meet_demand(0.5, team_size=2)["days"]
+    many = days_to_meet_demand(0.5, team_size=10)["days"]
+    assert few > many > 0                                   # fewer volunteers ⇒ more days
+
+def test_origin_distance_varies_by_base():
+    # haversine sanity: Delhi→Patna is hundreds of km; Patna→Patna ~0
+    assert haversine_km(28.6, 77.2, 25.6, 85.1) > 700
+    assert haversine_km(25.6, 85.1, 25.6, 85.1) < 1
+
+def test_optimizer_origin_changes_cost_and_is_state_scoped():
+    from_delhi = optimize("maternity", state="Bihar", origin="Delhi", top_n=5)["districts"]
+    from_patna = optimize("maternity", state="Bihar", origin="Patna (Bihar)", top_n=5)["districts"]
+    assert from_delhi and from_patna
+    assert all(d["state"] == "Bihar" for d in from_delhi)   # state-scoped
+    # same district costs more from Delhi than from Patna (farther)
+    pa = {d["district"]: d["cost_total_usd"] for d in from_patna}
+    assert any(d["cost_total_usd"] > pa.get(d["district"], 0) for d in from_delhi if d["district"] in pa)
+
+
 # ---------- trust-weighting + coverage-by-geography ----------
 def test_trust_weighted_supply_weights_and_toggle():
     assert trust_weighted_supply(2, 0, 5) == 2.0                       # high·1
@@ -154,9 +184,11 @@ def test_coverage_by_geography_ranks_and_classifies():
     s = coverage_summary(rows)
     assert s["districts"] == len(rows)
 
-def test_coverage_non_maternity_has_no_burden():
-    rows = coverage_by_geography("nicu", state="Bihar")
-    assert rows and not rows[0]["has_burden"]                          # NICU has no NFHS burden indicator
+def test_coverage_demand_honesty_gradient():
+    # emergency/trauma have NO NFHS demand proxy → demand_available False (ranked by supply scarcity);
+    # oncology/icu/maternity DO have measured demand.
+    assert coverage_by_geography("emergency", state="Bihar")[0]["demand_available"] is False
+    assert coverage_by_geography("oncology", state="Bihar")[0]["demand_available"] is True
 
 def test_coverage_toggle_changes_trust_weighted_supply():
     off = {r["district"]: r["trust_weighted_supply"] for r in coverage_by_geography("maternity", "Bihar", count_unverified=False)}

@@ -29,6 +29,7 @@ DISTRICT_BASE_CSV = _CACHE / "district_base.csv"
 REACHABILITY_CSV = _CACHE / "reachability_patna.csv"
 FACILITY_CLAIMS_CSV = _CACHE / "facility_claims.csv"
 DISTRICT_CAPABILITY_CSV = _CACHE / "district_capability.csv"
+DISTRICT_CENTROIDS_CSV = _CACHE / "district_centroids.csv"
 _CAPABILITY_ALIAS = {"maternal_health": "maternity"}
 _INT_COLS = {"facilities", "maternal_supply_facilities", "public", "private",
              "maternal_claim_high", "maternal_claim_medium", "maternal_claim_unverified",
@@ -168,7 +169,8 @@ def _all_district_capability() -> tuple:
         with DISTRICT_CAPABILITY_CSV.open() as f:
             rows = list(csv.DictReader(f))
     for r in rows:
-        for c in ("high", "medium", "unverified", "verified_supply", "total_signal"):
+        for c in ("high", "medium", "unverified", "verified_supply", "total_signal",
+                  "accepts_volunteers", "verified_beds"):
             r[c] = int(r.get(c) or 0)
     return tuple(rows)
 
@@ -188,6 +190,25 @@ def load_district_capability(capability: str = None, state: str = None) -> list[
 def list_states() -> list[str]:
     """States/UTs present in the coverage data (for the geography selector)."""
     return sorted({r["state_ut"].strip() for r in _all_district_capability() if r.get("state_ut", "").strip()})
+
+
+@lru_cache(maxsize=1)
+def load_district_centroids() -> dict:
+    """{normalized district_key -> (lat, lon)} for nationwide distance from a volunteer origin."""
+    if _lakebase_mode():
+        rows = _query("SELECT district_key, lat, lon FROM mission.district_centroids")
+    else:
+        if not DISTRICT_CENTROIDS_CSV.exists():
+            return {}
+        with DISTRICT_CENTROIDS_CSV.open() as f:
+            rows = list(csv.DictReader(f))
+    out = {}
+    for r in rows:
+        try:
+            out[r["district_key"]] = (float(r["lat"]), float(r["lon"]))
+        except (TypeError, ValueError):
+            continue
+    return out
 
 
 @lru_cache(maxsize=1)
