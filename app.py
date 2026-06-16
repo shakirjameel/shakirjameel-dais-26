@@ -501,7 +501,10 @@ else:
                         + (f'<br><b>claims:</b> “{cap_ev}”' if cap_ev else
                            '<br><b>claims:</b> <i>flag/specialty asserts it, but the facility’s own text doesn’t — unverified</i>')
                         + (f'<br><b>corroborated by:</b> “{proc_ev}”' if proc_ev else
-                           ('<br><span class="muted">not corroborated by procedure/equipment text</span>' if cap_ev else ''))
+                           (('<br><span class="muted">procedure/equipment text present but does not mention the service — not corroborated</span>'
+                             if str(c.get("corroboration_available") or "0") in ("1", "1.0")
+                             else '<br><span class="muted">no procedure/equipment text available to corroborate — undocumented, not disproven</span>')
+                            if cap_ev else ''))
                         + '</div>', unsafe_allow_html=True)
                 st.caption("Each line is the facility's own extracted text — cited with its source link, "
                            "plus contact + whether it accepts volunteers (an actionable partner list).")

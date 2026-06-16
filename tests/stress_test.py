@@ -18,7 +18,7 @@ from mission_core.burden import (parse_nfhs_value, _normalize, burden_score, cap
                                   INTERVENTION_INDICATORS)
 from mission_core.claims import classify_claim, _items, CAPABILITIES
 from mission_core.coverage import (supply_adequacy, coverage_gap, trust_weighted_supply,
-                                   data_confidence, gap_classification)
+                                   gap_classification)
 from mission_core.cost import mission_cost, days_to_meet_demand
 from mission_core.impact import need_addressed_per_cost
 from mission_core.reach import haversine_km
@@ -115,7 +115,7 @@ warn("claim negation handled", neg["confidence"] == "none",
      f"'no maternity services' graded {neg['confidence']} (known: substring match, no negation guard)")
 
 # ===================================================================== 3. coverage / gap
-section("coverage.py — adequacy / gap / trust_weighted / classification / data_confidence")
+section("coverage.py — adequacy / gap / trust_weighted / classification")
 check("adequacy 0 -> 0", supply_adequacy(0) == 0.0)
 check("adequacy negative -> 0", supply_adequacy(-5) == 0.0)
 check("adequacy asymptote <1", supply_adequacy(1e6) < 1.0 and supply_adequacy(1e6) > 0.99)
@@ -141,11 +141,6 @@ check("gapclass confirmed (high)", gap_classification(2, 0, 0) == "confirmed_cov
 check("gapclass confirmed (medium)", gap_classification(0, 1, 0) == "confirmed_coverage")
 check("gapclass unverified-only", gap_classification(0, 0, 3) == "unverified_claims")
 check("gapclass desert", gap_classification(0, 0, 0) == "no_claim_desert")
-
-check("dataconf data-poor", data_confidence(0, 0, 0) == "data-poor")
-check("dataconf well-evidenced", data_confidence(5, 5, 3) == "well-evidenced")
-check("dataconf claims-only", data_confidence(5, 2, 0) == "claims-only")
-check("dataconf documented-gap", data_confidence(5, 0, 0) == "documented-gap")
 
 # ===================================================================== 4. cost / impact / reach
 section("cost.py / impact.py / reach.py")
