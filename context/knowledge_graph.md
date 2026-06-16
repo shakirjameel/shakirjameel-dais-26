@@ -24,10 +24,17 @@ The chain still runs. The graph is additive — it makes the existing results qu
 | **Facility** | name, type, operator_type (public/private), specialties[], lat, lon, cluster_id | Provided facilities dataset |
 | **Intervention** | name, burden_indicators[], supply_column, cost_profile | mission_core config (INTERVENTION_INDICATORS, INTERVENTION_SUPPLY_COLUMN) |
 | **Indicator** | name, value, confidence (high/low/suppressed), direction (high_is_worse/low_is_worse), raw_string | NFHS-5 district rows, parsed via parse_nfhs_value() |
+| **Capability** | name (maternity/icu/nicu/emergency/oncology/trauma), terminology_dict | mission_core/claims.py CAPABILITIES |
+| **ClaimGrade** | grade (high/medium/unverified/none), definition, trust_weight | mission_core/claims.py — high=1.0, medium=0.6, unverified=0.3 |
+| **GapClassification** | type (confirmed_coverage/unverified_claims/no_claim_desert), rule | mission_core/coverage_view.py |
 | **StagingCity** | name, lat, lon | data_access.py STAGING constant |
 | **CostAssumption** | coefficient_name, value, unit, source_label | cost.py CostAssumptions dataclass |
 | **Mission** | intervention, team_size, days, date, staging_city, outcome | Future: Virtue Foundation operational records |
 | **DataSource** | name, vintage, coverage_scope, known_risks[], resolution_method | DATA_RISKS.md, geo_resolve.py metadata |
+| **Scenario** | user_id, name, inputs_snapshot, ranking_result, created_at | mission_core/data_access.py (user persistence) |
+| **Review** | user_id, district_id, action (approve/reject/investigate), reason | mission_core/data_access.py |
+| **Shortlist** | user_id, district_id, pinned_at | mission_core/data_access.py |
+| **Note** | user_id, target_id, text, created_at | mission_core/data_access.py |
 
 ---
 
@@ -44,6 +51,13 @@ The chain still runs. The graph is additive — it makes the existing results qu
 | **DERIVED_FROM** | Any node → DataSource | transform_step, transform_module, timestamp, row_id |
 | **ADJACENT_TO** | District → District | shared_border (bool), same_state (bool), road_distance_km (optional) |
 | **PREVIOUSLY_SERVED** | Mission → District | outcome_summary, year, team_feedback |
+| **CLAIMS_CAPABILITY** | Facility → Capability | source_text, claim_date, terminology_match[] |
+| **CORROBORATED_BY** | Capability → ClaimGrade | evidence_type, corroboration_method |
+| **HAS_COVERAGE** | District → Capability | trust_weighted_supply, facility_count, grade_distribution{} |
+| **CLASSIFIED_AS** | District → GapClassification | capability, computed_at |
+| **SAVES** | Scenario → District | intervention, ranking_position |
+| **REVIEWS** | Review → District | action, reason, reviewed_at |
+| **PINS** | Shortlist → District | pinned_at |
 
 ---
 

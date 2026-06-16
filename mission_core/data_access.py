@@ -103,7 +103,7 @@ def load_districts() -> list[dict]:
     else:
         if not DISTRICT_BASE_CSV.exists():
             raise FileNotFoundError(f"{DISTRICT_BASE_CSV} not found. Run: ./.venv/bin/python -m data.geo_resolve")
-        with DISTRICT_BASE_CSV.open() as f:
+        with DISTRICT_BASE_CSV.open(encoding="utf-8", errors="replace") as f:
             rows = list(csv.DictReader(f))
     for r in rows:
         for c in _INT_COLS:
@@ -131,7 +131,7 @@ def _all_facility_claims() -> tuple:
     else:
         if not FACILITY_CLAIMS_CSV.exists():
             return tuple()
-        with FACILITY_CLAIMS_CSV.open() as f:
+        with FACILITY_CLAIMS_CSV.open(encoding="utf-8", errors="replace") as f:
             rows = list(csv.DictReader(f))
     return tuple(rows)
 
@@ -165,7 +165,7 @@ def _all_district_capability() -> tuple:
     else:
         if not DISTRICT_CAPABILITY_CSV.exists():
             return tuple()
-        with DISTRICT_CAPABILITY_CSV.open() as f:
+        with DISTRICT_CAPABILITY_CSV.open(encoding="utf-8", errors="replace") as f:
             rows = list(csv.DictReader(f))
     for r in rows:
         for c in ("high", "medium", "unverified", "verified_supply", "total_signal"):

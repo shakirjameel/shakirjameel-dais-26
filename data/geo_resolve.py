@@ -105,7 +105,7 @@ def load_facilities() -> tuple[list[dict], bool]:
     columns); else the legacy 5-column facilities_geo.csv (no text -> claims can't be corroborated)."""
     has_text = FAC_TEXT_CSV.exists()
     src = FAC_TEXT_CSV if has_text else FAC_GEO_CSV
-    with src.open() as f:
+    with src.open(encoding="utf-8", errors="replace") as f:
         rows = list(csv.DictReader(f))
     for r in rows:
         r["latitude"] = float(r["latitude"])
@@ -120,7 +120,7 @@ def load_facilities() -> tuple[list[dict], bool]:
 
 
 def load_nfhs_districts() -> list[dict]:
-    with NFHS_CSV.open() as f:
+    with NFHS_CSV.open(encoding="utf-8", errors="replace") as f:
         return list(csv.DictReader(f))
 
 
@@ -281,19 +281,19 @@ def resolve(force_fetch: bool = False) -> dict:
         dc_rows.append(row)
 
     # 6. write outputs
-    with OUT_CSV.open("w", newline="") as f:
+    with OUT_CSV.open("w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=list(rows_out[0].keys()))
         w.writeheader(); w.writerows(rows_out)
-    with UNMATCHED_CSV.open("w", newline="") as f:
+    with UNMATCHED_CSV.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(["polygon_district", "facilities", "fuzzy_suggestion", "reason"])
         w.writerows(sorted(unmatched_polys, key=lambda x: -x[1]))
     if claim_rows:
-        with FACILITY_CLAIMS_CSV.open("w", newline="") as f:
+        with FACILITY_CLAIMS_CSV.open("w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=list(claim_rows[0].keys()))
             w.writeheader(); w.writerows(claim_rows)
     if dc_rows:
-        with DISTRICT_CAPABILITY_CSV.open("w", newline="") as f:
+        with DISTRICT_CAPABILITY_CSV.open("w", newline="", encoding="utf-8") as f:
             w = csv.DictWriter(f, fieldnames=list(dc_rows[0].keys()))
             w.writeheader(); w.writerows(dc_rows)
 
