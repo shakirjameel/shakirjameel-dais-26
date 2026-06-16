@@ -78,7 +78,7 @@ CAT_COLOR = {
 }
 CAT_LABEL = {
     "strong": "Strong coverage", "moderate": "Moderate coverage", "weaker": "Weaker coverage",
-    "claim_only": "Claims only — not verified", "no_claim_desert": "No-claim desert",
+    "claim_only": "Claims only — not verified", "no_claim_desert": "Care desert",
     "no_data": "No data yet",
 }
 # coloured dot per row (data_editor can't tint rows); the label text disambiguates the three greens
@@ -91,7 +91,7 @@ _COLUMN_HELP = {
     "Review": "Tick to open this district's facility records (the cited evidence) below.",
     "District": "District name (NFHS-5). Tick its Review box to drill into the underlying facilities.",
     "Coverage": "Verdict for this capability: 🟢 verified coverage · 🟡 claims only (unverified) · "
-                "🔴 no-claim desert (a real gap) · ⚪ no data yet (populated, but no facility records).",
+                "🔴 care desert (a real gap) · ⚪ no data yet (populated, but no facility records).",
     "Verified facilities": "Facilities whose claimed capability is backed by their own "
                            "procedure/equipment text — the trustworthy supply.",
     "Unverified claims": "Facilities that assert the capability but whose own text doesn't back it "
@@ -545,7 +545,8 @@ if ss.get("show_copilot"):
 if active_state is None:
     intro()
     n_lit = sum(1 for r in roll if r["lit"])
-    n_desert = sum(1 for r in roll if r["fill_category"] == "no_claim_desert")
+    n_desert_states = sum(1 for r in roll if r["fill_category"] == "no_claim_desert")
+    n_desert_districts = sum(r.get("n_desert", 0) for r in roll)
     n_verified = sum(r["verified_facilities"] for r in roll)
     n_no_data = sum(r.get("n_no_data", 0) for r in roll)
     st.markdown(f'<div class="crumb">India</div>', unsafe_allow_html=True)
@@ -562,8 +563,11 @@ if active_state is None:
     with rail:
         st.markdown(f'<div class="kpi"><div class="n">{n_lit} / 36</div>'
                     f'<div class="l">states with facility data</div></div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="kpi" style="margin-top:8px"><div class="n">{n_desert}</div>'
-                    f'<div class="l">states: no facility claims {cap_label}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi" style="margin-top:8px"><div class="n">{n_desert_districts}</div>'
+                    f'<div class="l">🔴 care-desert districts · {cap_label}</div></div>', unsafe_allow_html=True)
+        st.markdown(f'<div class="kpi" style="margin-top:8px"><div class="n">{n_desert_states}</div>'
+                    f'<div class="l">🔴 care-desert states (no claim anywhere) · {cap_label}</div></div>',
+                    unsafe_allow_html=True)
         st.markdown(f'<div class="kpi" style="margin-top:8px"><div class="n">{n_verified:,}</div>'
                     f'<div class="l">text-verified facilities</div></div>', unsafe_allow_html=True)
         st.markdown(f'<div class="kpi" style="margin-top:8px"><div class="n">{n_no_data}</div>'
@@ -597,7 +601,7 @@ else:
         k2.markdown(f'<div class="kpi"><div class="n">{summ["unverified_claims"]}</div>'
                     f'<div class="l">claim-only districts</div></div>', unsafe_allow_html=True)
         k3.markdown(f'<div class="kpi"><div class="n">{summ["no_claim_desert"]}</div>'
-                    f'<div class="l">no-claim deserts</div></div>', unsafe_allow_html=True)
+                    f'<div class="l">🔴 care deserts</div></div>', unsafe_allow_html=True)
         k4.markdown(f'<div class="kpi"><div class="n">{summ["no_facility_data"]}</div>'
                     f'<div class="l">need, but no facility data'
                     + (f' ({nfd_high} high-need)' if nfd_high else '') + '</div></div>',
