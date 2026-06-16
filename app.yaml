@@ -33,3 +33,8 @@ env:
     value: "claude-opus-4-8"
   - name: LLM_API_KEY
     valueFrom: "llm-key"
+  # Genie "Ask the data" tab. Non-secret (just an id). Empty → the tab shows a setup hint and the rest
+  # of the app is unaffected. Create a Genie space over workspace.mission_uc.* (+ raw VF tables) on the
+  # serverless SQL warehouse, then paste its space id here (from the space URL .../genie/<space_id>).
+  - name: GENIE_SPACE_ID
+    value: "01f169b79bea145194ed851438c7f553"

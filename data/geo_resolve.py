@@ -26,13 +26,16 @@ from __future__ import annotations
 
 import csv
 import difflib
+import os
 import re
 from pathlib import Path
 
 from data.external.district_polygons import fetch_india_districts, build_index, assign_district
 from mission_core.claims import classify_claim, CAPABILITIES
 
-CACHE = Path(__file__).resolve().parent / "cache"
+# Honours DATA_CACHE_DIR (set by the Databricks Job to a writable tmp dir; see data/job_ingest.py);
+# defaults to data/cache for local runs.
+CACHE = Path(os.environ.get("DATA_CACHE_DIR") or (Path(__file__).resolve().parent / "cache"))
 # Prefer the free-text extract (facilities_text.csv, from data/02_facility_text_ingest.py) so we can
 # classify + CITE per-facility claims; fall back to the 5-column geo extract if text isn't pulled yet.
 FAC_TEXT_CSV = CACHE / "facilities_text.csv"

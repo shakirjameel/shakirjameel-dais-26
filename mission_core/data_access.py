@@ -24,12 +24,15 @@ from pathlib import Path
 STAGING = {"name": "Patna", "lat": 25.5941, "lon": 85.1376}   # Bihar
 CANDIDATE_STATES = {"bihar", "jharkhand"}                      # the core credible-need cluster
 
-_CACHE = Path(__file__).resolve().parent.parent / "data" / "cache"
+# Honours DATA_CACHE_DIR (the ingest Job points this at a writable tmp dir holding the freshly
+# written CSVs, so coverage_view can run in CSV mode there); defaults to data/cache otherwise.
+_CACHE = Path(os.environ.get("DATA_CACHE_DIR") or (Path(__file__).resolve().parent.parent / "data" / "cache"))
 DISTRICT_BASE_CSV = _CACHE / "district_base.csv"
 REACHABILITY_CSV = _CACHE / "reachability_patna.csv"
 FACILITY_CLAIMS_CSV = _CACHE / "facility_claims.csv"
 DISTRICT_CAPABILITY_CSV = _CACHE / "district_capability.csv"
 DISTRICT_CENTROIDS_CSV = _CACHE / "district_centroids.csv"
+DISTRICT_AI_SUMMARY_CSV = _CACHE / "district_ai_summary.csv"
 _CAPABILITY_ALIAS = {"maternal_health": "maternity"}
 _INT_COLS = {"facilities", "maternal_supply_facilities", "public", "private",
              "maternal_claim_high", "maternal_claim_medium", "maternal_claim_unverified",
@@ -208,6 +211,35 @@ def load_district_centroids() -> dict:
             out[r["district_key"]] = (float(r["lat"]), float(r["lon"]))
         except (TypeError, ValueError):
             continue
+    return out
+
+
+@lru_cache(maxsize=1)
+def _all_ai_summaries() -> tuple:
+    """Per-district×capability AI recommendation (Databricks ai_query, precomputed in the ingest Job).
+    Dual-backend; empty tuple if not built yet (the coverage table just shows '—')."""
+    if _lakebase_mode():
+        try:
+            rows = _query("SELECT district_key, capability, ai_summary FROM mission.district_ai_summary")
+        except Exception:
+            return tuple()   # table not loaded yet → graceful (column renders '—')
+    else:
+        if not DISTRICT_AI_SUMMARY_CSV.exists():
+            return tuple()
+        with DISTRICT_AI_SUMMARY_CSV.open() as f:
+            rows = list(csv.DictReader(f))
+    return tuple(rows)
+
+
+def load_ai_summaries(capability: str = None) -> dict:
+    """{normalized district_key -> ai_summary} for a capability (alias-aware). Empty if not built."""
+    cap = _CAPABILITY_ALIAS.get(capability, capability) if capability else None
+    out = {}
+    for r in _all_ai_summaries():
+        if cap and r.get("capability") != cap:
+            continue
+        if r.get("ai_summary"):
+            out[r.get("district_key")] = r["ai_summary"]
     return out
 
 

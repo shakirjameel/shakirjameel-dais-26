@@ -23,9 +23,12 @@ USAGE
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-CACHE_DIR = Path(__file__).resolve().parent.parent / "cache"
+# Cache dir honours DATA_CACHE_DIR so the Databricks Job (whose bundle source lives on the
+# read-only /Workspace mount) can redirect writes to a writable tmp dir; defaults to data/cache.
+CACHE_DIR = Path(os.environ.get("DATA_CACHE_DIR") or (Path(__file__).resolve().parent.parent / "cache"))
 GEOJSON_FILE = CACHE_DIR / "india_adm2.geojson"
 GEOBOUNDARIES_API = "https://www.geoboundaries.org/api/current/gbOpen/IND/ADM2/"
 

@@ -255,6 +255,21 @@ def generate_brief(intervention: str, district: str, team_size: int = 6, days: i
     return {"brief": brief}
 
 
+def ask_genie(question: str) -> dict:
+    """Ask Databricks Genie (native text-to-SQL) a free-form data question over the curated +
+    raw Unity Catalog tables. Use ONLY for ad-hoc data lookups the structured tools above don't
+    cover (e.g. raw counts, cross-tabs). Returns the generated SQL + result rows the agent can cite.
+    Numbers come from Genie's SQL — present them as such, never embellish."""
+    from . import genie
+    if not genie.configured():
+        return {"error": "Genie is not configured (no GENIE_SPACE_ID) — use the structured tools instead."}
+    r = genie.ask(question)
+    if r.get("error"):
+        return {"error": r["error"]}
+    return {"answer": r.get("text"), "sql": r.get("sql"),
+            "columns": r.get("columns"), "rows": (r.get("rows") or [])[:50]}
+
+
 # ---------------------------------------------------------------- OpenAI tool schemas + dispatch
 _INTERVENTION_ENUM = list(INTERVENTION_INDICATORS)
 _COEFFICIENT_ENUM = list(COEFFICIENTS)
@@ -356,6 +371,15 @@ TOOLS = [
             "district": {"type": "string"},
             "team_size": {"type": "integer"}, "days": {"type": "integer"}},
             "required": ["intervention", "district"], "additionalProperties": False}}},
+    {"type": "function", "function": {
+        "name": "ask_genie",
+        "description": "Ask Databricks Genie (native text-to-SQL) a free-form data question over the "
+                       "curated + raw Unity Catalog tables. Use ONLY for ad-hoc data lookups the other "
+                       "tools don't cover (raw facility counts, cross-tabs, one-off aggregations). "
+                       "Returns the generated SQL + result rows — cite those numbers as Genie's.",
+        "parameters": {"type": "object", "properties": {
+            "question": {"type": "string", "description": "A plain-English data question."}},
+            "required": ["question"], "additionalProperties": False}}},
 ]
 
 _DISPATCH = {
@@ -367,6 +391,7 @@ _DISPATCH = {
     "get_district_facilities": get_district_facilities,
     "sensitivity_analysis": sensitivity_analysis,
     "generate_brief": generate_brief,
+    "ask_genie": ask_genie,
 }
 
 

@@ -170,6 +170,54 @@ def test_optimizer_origin_changes_cost_and_is_state_scoped():
     pa = {d["district"]: d["cost_total_usd"] for d in from_patna}
     assert any(d["cost_total_usd"] > pa.get(d["district"], 0) for d in from_delhi if d["district"] in pa)
 
+def test_mission_cost_is_monotonic_in_distance_for_every_origin():
+    # F1 regression: a CLOSER district must never cost MORE than a farther one (all else equal).
+    # Travel time is modelled as distance ÷ avg-speed for every origin (incl. Patna's ORS rows), so
+    # cost is a monotone function of distance. Guards against re-introducing raw ORS drive-time.
+    for origin in ("Delhi", "Patna (Bihar)"):
+        rows = [d for d in optimize("maternity", state="Bihar", origin=origin)["districts"]
+                if d["distance_km"] is not None]
+        rows.sort(key=lambda d: d["distance_km"])
+        costs = [d["cost_total_usd"] for d in rows]
+        assert costs == sorted(costs), f"non-monotonic cost vs distance from {origin}"
+
+def test_auto_days_is_a_readout_and_never_reorders_ranking():
+    # F2 regression: auto_days sets the displayed mission length/cost but ranking is on a FIXED basis,
+    # so the order and impact scores must be identical whether auto_days is on or off.
+    off = optimize("maternity", state="Bihar", origin="Delhi", auto_days=False, top_n=8)["districts"]
+    on = optimize("maternity", state="Bihar", origin="Delhi", auto_days=True, top_n=8)["districts"]
+    assert [d["district"] for d in off] == [d["district"] for d in on]
+    assert [d["impact_score"] for d in off] == [d["impact_score"] for d in on]
+    # ranking cost basis is fixed; only the displayed plan length differs
+    assert all(d["rank_cost_usd"] == d["cost_total_usd"] for d in off)  # off: days_used == days
+    assert all("days_to_meet_demand" in d for d in on)
+
+def test_optimizer_surfaces_data_gaps_ranked_by_need():
+    # zero-facility districts (excluded from deployment ranking) are returned as data_gaps, populated +
+    # measured-need, ranked by NFHS need — the care-desert-vs-data-gap visibility (not a deployment rec).
+    res = optimize("maternity", state=None, origin="Patna (Bihar)")
+    gaps = res["data_gaps"]
+    assert gaps and res["no_facility_data"] == len(gaps)
+    assert all(g["total_facilities"] == 0 for g in gaps)          # genuinely no facility records
+    needs = [g["burden"] for g in gaps if g["demand_available"] and g["burden"] is not None]
+    assert needs == sorted(needs, reverse=True)                   # ranked by measured need (desc)
+    assert gaps[0]["gap_rank"] == 1
+    # none of the data-gap districts leaked into the deployment ranking
+    ranked = {d["district"] for d in res["districts"]}
+    assert not (ranked & {g["district"] for g in gaps})
+
+def test_optimizer_data_gaps_honest_when_no_demand_proxy():
+    # emergency has no NFHS demand proxy → gaps still listed (populated) but flagged not-need-ranked
+    res = optimize("emergency", state=None, origin="Patna (Bihar)")
+    assert res["data_gaps"]
+    assert all(g["demand_available"] is False for g in res["data_gaps"])
+
+def test_coverage_summary_counts_no_facility_data():
+    rows = coverage_by_geography("maternity")
+    summ = coverage_summary(rows)
+    assert summ["no_facility_data"] == sum(1 for r in rows if r["total_facilities"] == 0)
+    assert summ["no_facility_data"] > 0
+
 
 # ---------- trust-weighting + coverage-by-geography ----------
 def test_trust_weighted_supply_weights_and_toggle():
@@ -326,6 +374,37 @@ def test_chain_two_tiers_and_signature_beat():
     # EXCLUDED with a reason, never silently dropped
     assert exc["D-no-data"]["metric"] is None
     assert exc["D-no-data"]["excluded_reason"] in ("burden unavailable", "unreachable")
+
+
+def test_coverage_rows_carry_ai_summary_none_when_not_built():
+    # When no AI summaries are built, every row still carries the key, set to None (UI shows '—').
+    # Patch the loader to the empty/"not built" state so this is deterministic regardless of any
+    # local district_ai_summary.csv that a load_lakebase run may have written into the cache.
+    import mission_core.coverage_view as cv
+    orig = cv.load_ai_summaries
+    cv.load_ai_summaries = lambda capability=None: {}
+    try:
+        rows = cv.coverage_by_geography("maternity")
+    finally:
+        cv.load_ai_summaries = orig
+    assert rows, "expected coverage rows"
+    assert all("ai_summary" in r for r in rows)
+    assert all(r["ai_summary"] is None for r in rows)
+
+
+def test_coverage_attaches_ai_summary_by_district_and_capability():
+    import mission_core.coverage_view as cv
+    base = coverage_by_geography("maternity")
+    key = base[0]["district_key"]
+    orig = cv.load_ai_summaries
+    cv.load_ai_summaries = lambda capability=None: {key: "TEST ACTION"}   # inject one summary
+    try:
+        rows = cv.coverage_by_geography("maternity")
+    finally:
+        cv.load_ai_summaries = orig
+    hit = next(r for r in rows if r["district_key"] == key)
+    assert hit["ai_summary"] == "TEST ACTION"
+    assert all(r["ai_summary"] is None for r in rows if r["district_key"] != key)
 
 
 if __name__ == "__main__":

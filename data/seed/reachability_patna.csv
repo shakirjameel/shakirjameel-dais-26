@@ -1,0 +1,63 @@
+district_key,district,state,distance_km,duration_min,source
+araria,Araria,Bihar,326.97,239.1,ors
+arwal,Arwal,Bihar,79.99,59.9,ors
+aurangabad,Aurangabad,Bihar,1427.52,971.4,ors
+banka,Banka,Bihar,246.6,369.9,straight_line
+begusarai,Begusarai,Bihar,127.68,99.6,ors
+bhagalpur,Bhagalpur,Bihar,252.4,212.1,ors
+bhojpur,Bhojpur,Bihar,72.14,66.5,ors
+bokaro,Bokaro,Jharkhand,310.36,236.7,ors
+buxar,Buxar,Bihar,132.89,108.4,ors
+chatra,Chatra,Jharkhand,184.7,131.7,ors
+darbhanga,Darbhanga,Bihar,146.02,114.7,ors
+deoghar,Deoghar,Jharkhand,263.06,200.0,ors
+dhanbad,Dhanbad,Jharkhand,318.94,232.1,ors
+dumka,Dumka,Jharkhand,309.24,234.6,ors
+garhwa,Garhwa,Jharkhand,258.54,197.2,ors
+gaya,Gaya,Bihar,111.91,83.0,ors
+giridih,Giridih,Jharkhand,229.53,190.3,ors
+godda,Godda,Jharkhand,322.32,241.4,ors
+gopalganj,Gopalganj,Bihar,164.99,129.3,ors
+gumla,Gumla,Jharkhand,338.84,244.1,ors
+hazaribagh,Hazaribagh,Jharkhand,227.16,171.2,ors
+jamtara,Jamtara,Jharkhand,316.02,251.4,ors
+jamui,Jamui,Bihar,174.7,132.9,ors
+jehanabad,Jehanabad,Bihar,58.06,46.0,ors
+kaimur bhabua,Kaimur (Bhabua),Bihar,193.97,146.3,ors
+katihar,Katihar,Bihar,310.63,237.2,ors
+khagaria,Khagaria,Bihar,173.44,129.8,ors
+khunti,Khunti,Jharkhand,387.45,278.2,ors
+kishanganj,Kishanganj,Bihar,377.82,274.7,ors
+kodarma,Kodarma,Jharkhand,164.4,124.1,ors
+lakhisarai,Lakhisarai,Bihar,138.1,105.6,ors
+latehar,Latehar,Jharkhand,284.17,206.6,ors
+lohardaga,Lohardaga,Jharkhand,289.62,211.9,ors
+madhepura,Madhepura,Bihar,229.8,206.5,ors
+madhubani,Madhubani,Bihar,183.26,141.2,ors
+munger,Munger,Bihar,188.25,282.4,straight_line
+muzaffarpur,Muzaffarpur,Bihar,80.85,63.2,ors
+nalanda,Nalanda,Bihar,65.76,53.6,ors
+nawada,Nawada,Bihar,115.91,91.3,ors
+pakur,Pakur,Jharkhand,381.29,281.3,ors
+palamu,Palamu,Jharkhand,211.32,172.1,ors
+pashchim champaran,Pashchim Champaran,Bihar,237.82,172.5,ors
+pashchimi singhbhum,Pashchimi Singhbhum,Jharkhand,461.56,692.3,straight_line
+patna,Patna,Bihar,25.77,29.3,ors
+purba champaran,Purba Champaran,Bihar,150.16,109.3,ors
+purbi singhbhum,Purbi Singhbhum,Jharkhand,483.06,350.4,ors
+purnia,Purnia,Bihar,308.17,236.5,ors
+ramgarh,Ramgarh,Jharkhand,280.6,200.1,ors
+ranchi,Ranchi,Jharkhand,326.58,240.5,ors
+rohtas,Rohtas,Bihar,149.58,116.2,ors
+saharsa,Saharsa,Bihar,189.26,174.7,ors
+sahibganj,Sahibganj,Jharkhand,355.95,268.3,ors
+samastipur,Samastipur,Bihar,97.44,146.2,straight_line
+saraikelakharsawan,Saraikela-Kharsawan,Jharkhand,441.24,331.2,ors
+saran,Saran,Bihar,71.4,71.9,ors
+sheikhpura,Sheikhpura,Bihar,111.96,86.6,ors
+sheohar,Sheohar,Bihar,123.32,102.8,ors
+simdega,Simdega,Jharkhand,442.52,663.8,straight_line
+sitamarhi,Sitamarhi,Bihar,132.74,102.0,ors
+siwan,Siwan,Bihar,133.3,106.9,ors
+supaul,Supaul,Bihar,243.82,177.1,ors
+vaishali,Vaishali,Bihar,39.84,39.0,ors

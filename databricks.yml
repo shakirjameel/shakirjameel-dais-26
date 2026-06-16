@@ -16,6 +16,25 @@ sync:
     - ".env"
 
 resources:
+  jobs:
+    mission_ingest:
+      name: mission-ingest
+      description: "Reproducible on-platform ingestion: VF shared catalog → curated UC Delta (workspace.mission_uc)"
+      # Single serverless task (no job_cluster_key). Produces the curated UC Delta tables (the Genie
+      # substrate + reproducible pipeline). NOTE: the Lakebase COPY is intentionally NOT a job task —
+      # it OOMs on Free-Edition serverless's memory ceiling even with tiny data + streaming (see
+      # VERIFICATION.md "Free-Edition risk"). Lakebase mission.* is loaded via the local `data.load_lakebase`
+      # path instead. Runs as the bundle owner.
+      tasks:
+        - task_key: build_uc
+          notebook_task:
+            notebook_path: ./data/job_ingest.py
+            base_parameters:
+              source_root: ${workspace.file_path}
+              uc_catalog: workspace
+              uc_schema: mission_uc
+              app_sp_client_id: 355b9275-0af4-4e57-b04c-f60cca3d9311
+
   apps:
     mission_copilot:
       name: mission-copilot
@@ -32,6 +51,14 @@ resources:
             scope: mission-copilot
             key: llm_api_key
             permission: READ
+        - name: genie
+          # Genie "Ask the data" tab. Declaring it as an app resource auto-grants the app SP
+          # CAN_RUN on the space (no manual permissions call). Space created over workspace.mission_uc.*
+          # + raw VF tables; id mirrored in app.yaml GENIE_SPACE_ID.
+          genie_space:
+            name: 01f169b79bea145194ed851438c7f553
+            space_id: 01f169b79bea145194ed851438c7f553
+            permission: CAN_RUN
 
 targets:
   default:
