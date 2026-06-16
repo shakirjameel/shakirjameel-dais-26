@@ -123,7 +123,8 @@ def _district_cat(r: dict) -> str:
 
 
 # ----------------------------------------------------------------------------- page + theme
-st.set_page_config(page_title="Medical Desert Planner", page_icon="🩺", layout="wide")
+st.set_page_config(page_title="Medical Desert Planner", page_icon="🩺", layout="wide",
+                   initial_sidebar_state="expanded")
 ACCENT = "#FF3621"
 st.markdown(f"""
 <style>
@@ -170,24 +171,43 @@ st.markdown(f"""
     padding:0 !important; color:var(--accent) !important; font-weight:600; font-size:1.05rem !important; }}
   /* hide the default Streamlit ⋮ menu — replaced by our "How does it all work?" link */
   [data-testid="stMainMenu"], #MainMenu {{ display:none !important; }}
-  /* "How does it all work?" link pinned top-RIGHT of the nav bar, vertically centred on the title's
-     midpoint (1.75rem = centre of the 3.5rem bar) via translateY(-50%) — aligns with the title regardless
-     of the header's true rendered height. It's a real Streamlit button floated here (can't live in the chrome). */
-  .st-key-howbar {{ position:fixed !important; top:1.75rem !important; transform:translateY(-50%) !important;
-                    right:1.5rem; z-index:1000000; width:auto !important; margin:0 !important; padding:0 !important; }}
-  .st-key-howbar .stButton, .st-key-howbar .stButton button {{ margin:0 !important; padding:0 !important; }}
-  .st-key-howbar .stButton button {{ font-size:.98rem !important; white-space:nowrap; }}
-  .st-key-howbar .stButton button:hover {{ text-decoration:underline !important; }}
-  /* Streamlit's running/status animation: just LEFT of the link, same vertical centring */
+  /* persistent label pinned with the docked chat bar (so the "Ask the copilot" context never scrolls away) */
+  [data-testid="stBottomBlockContainer"]::before {{
+    content:"💬 Ask the copilot — analysis or a live-data (Genie) question; it cites only tool/Genie numbers.";
+    display:block; color:var(--muted); font-size:.82rem; font-weight:500; padding:.4rem .25rem .15rem; }}
+  /* nav-bar links pinned top-RIGHT — each in its own container at a different right-offset, vertically
+     centred on the bar midpoint (1.75rem) via translateY(-50%). (Single-link pinning, which centres cleanly;
+     two of them avoids the stacked-flex problem.) Copilot sits just LEFT of How-does-it-work. */
+  .st-key-howbar, .st-key-copilotlink {{ position:fixed !important; top:1.75rem !important;
+                    transform:translateY(-50%) !important; z-index:1000000; width:auto !important;
+                    margin:0 !important; padding:0 !important; }}
+  .st-key-howbar {{ right:1.5rem; }}
+  .st-key-copilotlink {{ right:15rem; }}
+  .st-key-howbar .stButton, .st-key-howbar .stButton button,
+  .st-key-copilotlink .stButton, .st-key-copilotlink .stButton button {{ margin:0 !important; padding:0 !important; }}
+  .st-key-howbar .stButton button, .st-key-copilotlink .stButton button {{ font-size:.98rem !important; white-space:nowrap; }}
+  .st-key-howbar .stButton button:hover, .st-key-copilotlink .stButton button:hover {{ text-decoration:underline !important; }}
+  /* clickable home logo pinned top-LEFT, styled like the title (replaces the old ::before title).
+     left:3.5rem clears Streamlit's sidebar collapse toggle when the sidebar is closed; when the sidebar
+     is OPEN it shifts onto the white area (rule below) so it doesn't sit on the orange panel. */
+  .st-key-homelink {{ position:fixed !important; top:1.75rem !important; transform:translateY(-50%) !important;
+                    left:3.5rem; z-index:1000000; width:auto !important; margin:0 !important; padding:0 !important; }}
+  [data-testid="stApp"]:has([data-testid="stSidebar"][aria-expanded="true"]) .st-key-homelink {{
+                    left:21rem !important; }}   /* past the open (~20rem) sidebar → onto the white header */
+  .st-key-homelink .stButton, .st-key-homelink .stButton button {{ margin:0 !important; padding:0 !important; }}
+  .st-key-homelink .stButton button, .st-key-homelink .stButton button p,
+  .st-key-homelink .stButton button [data-testid="stMarkdownContainer"] {{
+                    color:var(--ink) !important; font-size:1.35rem !important;
+                    font-weight:700 !important; letter-spacing:-0.01em; white-space:nowrap; }}
+  .st-key-homelink .stButton button:hover {{ color:var(--accent) !important; text-decoration:none !important; }}
+  /* Streamlit's running/status animation: left of the two nav links, same vertical centring */
   [data-testid="stStatusWidget"] {{ position:fixed !important; top:1.75rem !important;
-                    transform:translateY(-50%) !important; right:15rem !important; z-index:1000000; }}
-  /* top nav bar: title + logo live in the Streamlit header (same bar as the ⋮ menu) */
+                    transform:translateY(-50%) !important; right:23rem !important; z-index:1000000; }}
+  /* top nav bar chrome (the title is now a real clickable link, .st-key-homelink) */
   [data-testid="stHeader"] {{ background:var(--surface); border-bottom:1px solid var(--border); height:3.5rem; }}
-  [data-testid="stHeader"]::before {{
-    content:"🩺  TrueNorth Health"; position:absolute; left:1.25rem; top:0; height:3.5rem;
-    display:flex; align-items:center; font-size:1.15rem; font-weight:600; letter-spacing:-0.01em;
-    color:var(--ink); white-space:nowrap; pointer-events:none;
-  }}
+  /* trim the oversized default top padding so content starts just below the 3.5rem nav bar
+     (most visible on the sparse Copilot page; also tightens the dashboard). */
+  [data-testid="stMainBlockContainer"] {{ padding-top:4rem !important; }}
   /* left filter panel: Databricks red with readable white text (inputs keep light bg + dark text) */
   [data-testid="stSidebar"] {{ background: var(--accent); }}
   [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3,
@@ -415,6 +435,20 @@ def _how_it_works():
         "equipment, or a needs-assessment scout). It interprets the metrics; it never invents them.\n"
         "    - **Ask the copilot** — one agent that orchestrates the deterministic tools **and** runs "
         "**Genie** text-to-SQL for ad-hoc questions, only ever stating numbers the tools/Genie returned.")
+    st.markdown(
+        "**The numbers, all auditable:**\n"
+        "- **Claim grades** — `high` = claimed **and** corroborated by the facility's own "
+        "procedure/equipment text; `medium` = claimed only; `unverified` = a structured flag with no "
+        "supporting text (never counted as real supply).\n"
+        "- **Trust-weighted supply** = `high × 1.0 + medium × 0.6` — evidence over assertion.\n"
+        "- **Adequacy saturates** — `adequacy = supply ÷ (supply + k)`: the 10th provider matters less than the 1st.\n"
+        "- **Care-gap (desert) score** = `demand × (1 − adequacy)`, with `demand` honest — an NFHS-5 proxy "
+        "where one exists, else ranked on supply scarcity and labelled as such.\n"
+        "- **Cost-per-impact** — rank by `desert ÷ mission-cost`, where "
+        "`mission-cost = 0.70·distance + 60·(team × days) + 200·(drive-hrs × team)` and "
+        "`drive-hrs = distance ÷ 45 km/h`, so a **closer district never costs more** than a farther one (tested).\n"
+        "- **Geography by coordinates, not names** — every facility is resolved to a district by "
+        "point-in-polygon (~99.98% coverage), then reconciled to NFHS-5 districts.")
     st.markdown("#### ⚙️ Technical enablers — what we built on Databricks")
     st.markdown(
         "- **Databricks Apps** — hosts the whole Streamlit app.\n"
@@ -433,14 +467,79 @@ def _how_it_works():
         "UC-Delta + AI half and Lakebase loads via a local step.\n"
         "- **Mosaic AI Vector Search** (semantic facility search) deferred — one-endpoint cap; embedding "
         "endpoints exist for a future build.")
+    st.markdown("#### 🛣️ What's next")
+    st.markdown(
+        "- **A richer mission-cost model.** Today the cost uses **road transport** + a flat per-diem; next: "
+        "**multi-modal transport** (air / train / road by distance & availability), **place-specific lodging "
+        "& boarding** (a metro night ≠ a rural one), and **live routing for any origin** (beyond the "
+        "precomputed set) — turning cost-per-impact from a good estimate into a near-quotable budget.\n"
+        "- **From relative to absolute need** — swap relative need for per-capita rates once a population "
+        "denominator is available, and surface absolute people-reached.\n"
+        "- **Semantic facility matching** — Mosaic AI Vector Search to match a mission's needs to the "
+        "best-fit facilities, beyond keyword corroboration.\n"
+        "- **Always-fresh data** — schedule the ingest Job and fold in NFHS-6 trends so a gap shows whether "
+        "it's improving or worsening.\n"
+        "- **A multi-turn copilot** — carry context across questions for true follow-up planning.")
     st.caption("Bottom line: deterministic where it must be auditable, AI where it adds human judgment — "
                "all on Databricks.")
 
 
-# Pinned to the right of the top nav bar, vertically centred (see .st-key-howbar in the CSS above).
+# ----------------------------------------------------------------------------- copilot (its own full page)
+ss.setdefault("show_copilot", False)
+ss.setdefault("copilot_msgs", [])   # [{role, content, trace}]
+
+
+def render_copilot():
+    """The copilot's own page (opened from the nav link). Full width — a proper chat: thread + docked
+    input. run() is single-shot (no cross-turn memory yet); the thread is rendered for a chat feel."""
+    from agent import genie as _genie
+    if st.button("← Back to dashboard", type="tertiary", key="copilot_back"):
+        ss["show_copilot"] = False; st.rerun()
+    st.markdown("### 💬 Copilot")
+    st.caption("One AI copilot — it reasons over the deterministic tools (coverage, optimizer, briefs, "
+               "cited evidence) **and** runs Databricks Genie text-to-SQL for ad-hoc data questions; it only "
+               "states numbers the tools or Genie returned." +
+               ("" if _genie.configured() else "  *(Genie live-data is off until GENIE_SPACE_ID is set.)*"))
+    for _m in ss["copilot_msgs"]:
+        with st.chat_message(_m["role"]):
+            if _m["role"] == "assistant" and _m.get("trace"):
+                with st.expander("Tool calls (the copilot's reasoning trace)"):
+                    for step in _m["trace"]:
+                        icon = "🗄️ Genie SQL" if step["tool"] == "ask_genie" else f"`{step['tool']}`"
+                        st.write(f"→ {icon}({step['args']})")
+            st.markdown(_m["content"])
+    if _prompt := st.chat_input("Ask the copilot — analysis or an ad-hoc data question…"):
+        ss["copilot_msgs"].append({"role": "user", "content": _prompt, "trace": None})
+        try:
+            from agent.orchestrator import run
+            with st.spinner("Copilot reasoning + calling tools (incl. Genie when needed)…"):
+                result = run(_prompt)
+            ss["copilot_msgs"].append({"role": "assistant", "content": result.final_text,
+                                       "trace": result.tool_trace})
+        except Exception as e:
+            ss["copilot_msgs"].append({"role": "assistant", "trace": None,
+                "content": f"⚠️ Copilot unavailable (LLM not reachable from the app): {e}\n\n"
+                           "The map, optimizer, and AI recommendations are fully deterministic — "
+                           "they work without the LLM."})
+        st.rerun()
+
+
+# Nav bar (pinned via CSS): clickable home logo (left) + Copilot / How-it-works links (right).
+with st.container(key="homelink"):
+    if st.button("🩺 TrueNorth Health", type="tertiary", key="nav_home"):
+        ss["show_copilot"] = False
+        go_to_india()                     # → India home view (reruns)
+with st.container(key="copilotlink"):
+    if st.button("💬 Copilot", type="tertiary", key="nav_copilot"):
+        ss["show_copilot"] = True; st.rerun()
 with st.container(key="howbar"):
-    if st.button("ⓘ How does it all work?", type="tertiary"):
+    if st.button("ⓘ How does it all work?", type="tertiary", key="nav_how"):
         _how_it_works()
+
+# Copilot is a full page of its own (opened from the nav link) — render it INSTEAD of the dashboard.
+if ss.get("show_copilot"):
+    render_copilot()
+    st.stop()
 
 # ============================================================================= INDIA view
 if active_state is None:
@@ -675,8 +774,8 @@ else:
 
 # ============================================================================= deep-dive tabs
 st.divider()
-tab_opt, tab_workspace, tab_agent = st.tabs(
-    ["🚑 Deployment optimizer", "My workspace", "Ask the copilot"])
+tab_opt, tab_workspace = st.tabs(
+    ["🚑 Deployment optimizer", "My workspace"])
 
 with tab_opt:
     scope = state_select if active_state else "all India"
@@ -809,27 +908,3 @@ with tab_workspace:
         if not sc:
             st.caption("No scenarios saved yet — save one from the sidebar.")
 
-with tab_agent:
-    from agent import genie
-    st.caption("One AI copilot. It **reasons over the deterministic tools** (coverage, optimizer, briefs, "
-               "cited facility evidence) **and** can **query the live data directly via Databricks Genie** "
-               "(text-to-SQL) when you ask an ad-hoc data question. It only states numbers the tools or "
-               "Genie returned. Needs the LLM key." +
-               ("" if genie.configured() else "  *(Genie data-query is off until GENIE_SPACE_ID is set; "
-                "the analysis tools work regardless.)*"))
-    q = st.text_input("Ask the copilot",
-                      placeholder="e.g. best-evidenced NICU facilities in Bihar — and where are the deserts? "
-                                  "· or: how many facilities are in Bihar?")
-    if st.button("Run agent", type="primary") and q.strip():
-        try:
-            from agent.orchestrator import run
-            with st.spinner("Copilot reasoning + calling tools (incl. Genie when needed)…"):
-                result = run(q)
-            with st.expander("Tool calls (the copilot's reasoning trace)", expanded=True):
-                for step in result.tool_trace:
-                    icon = "🗄️ Genie SQL" if step["tool"] == "ask_genie" else f"`{step['tool']}`"
-                    st.write(f"→ {icon}({step['args']})")
-            st.markdown(result.final_text)
-        except Exception as e:
-            st.error(f"Copilot unavailable (LLM not reachable from the app): {e}")
-            st.info("The map + optimizer above are fully deterministic — they work without the LLM.")
