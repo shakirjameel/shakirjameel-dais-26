@@ -1121,6 +1121,10 @@ body{{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sa
 .map-marker{{cursor:pointer;transition:r 0.15s;}}
 .map-marker:hover{{stroke:#fff;stroke-width:1.5;}}
 .map-marker.dimmed{{opacity:0.15;}}
+.map-marker.related{{stroke:#fff;stroke-width:1.5;}}
+.rel-arc{{fill:none;stroke-width:1.2;stroke-dasharray:4 3;opacity:0.6;pointer-events:none;}}
+@keyframes pulse-ring{{0%{{r:6;opacity:0.8;}}100%{{r:10;opacity:0;}}}}
+.rel-pulse{{animation:pulse-ring 1.2s ease-out infinite;}}
 #mapTooltip{{position:absolute;display:none;background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px 14px;font-size:11px;pointer-events:none;z-index:20;max-width:240px;box-shadow:0 4px 12px rgba(0,0,0,0.5);}}
 #mapTooltip b{{color:var(--blue);}}
 .detail-panel{{position:absolute;top:0;right:0;width:320px;height:100%;background:var(--bg2);border-left:1px solid var(--border);padding:16px;overflow-y:auto;transform:translateX(100%);transition:transform 0.25s ease;z-index:15;}}
@@ -1338,6 +1342,7 @@ function initMap(){{
 
 function selectCapability(cap){{
   currentCap=cap;
+  clearRelationships();
   recolorMarkers(document.getElementById('colorBy').value);
   recolorStates();
 }}
@@ -1357,6 +1362,7 @@ function burdenColor(v,max){{if(!v)return'var(--text2)';var t=v/max;if(t>0.7)ret
 
 function selectState(state){{
   currentState=state;
+  clearRelationships();
   closePanel();
   if(state==='all'){{
     markers.classed('dimmed',false).style('pointer-events','all');
@@ -1549,6 +1555,18 @@ function openPanel(p){{
     html+='</div>';
   }}
 
+  // Relationships
+  var pgc=p.coverage&&p.coverage[currentCap]&&p.coverage[currentCap].gc;
+  if(pgc){{
+    var relCount=mapPoints.filter(function(r){{return r.id!==p.id&&r.state===p.state&&r.coverage&&r.coverage[currentCap]&&r.coverage[currentCap].gc===pgc;}}).length;
+    if(relCount>0){{
+      html+='<div class="dp-section"><h4>Relationships</h4>';
+      html+='<div class="dp-row"><span class="dp-label">Same gap in '+p.state+'</span><span class="dp-val" style="color:var(--blue)">'+relCount+' districts</span></div>';
+      html+='<div style="font-size:9px;color:var(--text2);margin-top:2px">Arcs show districts with same '+pgc.replace(/_/g,' ')+' classification</div>';
+      html+='</div>';
+    }}
+  }}
+
   // Location
   html+='<div class="dp-section"><h4>Location</h4>';
   html+='<div class="dp-row"><span class="dp-label">Coordinates</span><span class="dp-val">'+p.lat+', '+p.lon+'</span></div>';
@@ -1556,9 +1574,44 @@ function openPanel(p){{
   html+='</div>';
   document.getElementById('dpContent').innerHTML=html;
   panel.classList.add('open');
+  showRelationships(p);
 }}
 
-function closePanel(){{document.getElementById('detailPanel').classList.remove('open');}}
+function showRelationships(p){{
+  clearRelationships();
+  var gc=p.coverage&&p.coverage[currentCap]&&p.coverage[currentCap].gc;
+  if(!gc)return;
+  var related=mapPoints.filter(function(r){{
+    return r.id!==p.id&&r.state===p.state&&r.coverage&&r.coverage[currentCap]&&r.coverage[currentCap].gc===gc;
+  }});
+  if(!related.length)return;
+  var arcG=mapG.append('g').attr('id','relArcs');
+  var src=projection([p.lon,p.lat]);
+  var color=GAP_COLORS[gc]||'var(--text2)';
+  related.forEach(function(r){{
+    var dst=projection([r.lon,r.lat]);
+    var mx=(src[0]+dst[0])/2,my=(src[1]+dst[1])/2;
+    var dx=dst[0]-src[0],dy=dst[1]-src[1];
+    var len=Math.sqrt(dx*dx+dy*dy)||1;
+    var off=Math.min(len*0.2,30);
+    var cx=mx+(-dy/len)*off,cy=my+(dx/len)*off;
+    arcG.append('path')
+      .attr('d','M'+src[0]+','+src[1]+' Q'+cx+','+cy+' '+dst[0]+','+dst[1])
+      .attr('class','rel-arc').attr('stroke',color);
+  }});
+  markers.each(function(d){{
+    if(related.find(function(r){{return r.id===d.id;}})){{
+      d3.select(this).classed('related',true).attr('r',function(dd){{return dd.isTop?7:5;}});
+    }}
+  }});
+}}
+
+function clearRelationships(){{
+  d3.select('#relArcs').remove();
+  markers&&markers.classed('related',false).attr('r',function(p){{return p.isTop?5:3;}});
+}}
+
+function closePanel(){{document.getElementById('detailPanel').classList.remove('open');clearRelationships();}}
 
 function initHierarchy(){{
   var c=document.getElementById('tab-hierarchy');
