@@ -126,14 +126,18 @@ def optimize(capability: str, state: str = None, origin: str = DEFAULT_ORIGIN,
     from .impact import need_addressed_per_cost
 
     rows = coverage_by_geography(capability, state, count_unverified)
-    out = []
+    out, excluded = [], 0
     for r in rows:
-        need = r["desert_score"]                          # demand × unmet-gap (or scarcity)
         dist = distance_from_origin(origin, r["district_key"])
+        # CREDIBILITY: you can't deploy to a district we have NO facility data on, or no route to.
+        # Those are "data gaps to investigate" — they live on the desert map, NOT in the ranking.
+        if r["total_facilities"] == 0 or dist["distance_km"] is None:
+            excluded += 1
+            continue
+        need = r["desert_score"]                          # demand × unmet-gap (or scarcity)
         dm = days_to_meet_demand(need, team_size, patients_per_volunteer_day, addressable_need_units)
         days_used = dm["days"] if (auto_days and dm["days"] > 0) else days
-        cost = mission_cost(dist["distance_km"] or 0.0, dist["drive_hours"] or 0.0,
-                            team_size, days_used, DEFAULTS)
+        cost = mission_cost(dist["distance_km"], dist["drive_hours"] or 0.0, team_size, days_used, DEFAULTS)
         out.append({**r,
             "origin": origin, "distance_km": dist["distance_km"], "drive_hours": dist["drive_hours"],
             "travel_source": dist["source"], "days_used": days_used,
@@ -142,13 +146,16 @@ def optimize(capability: str, state: str = None, origin: str = DEFAULT_ORIGIN,
             "need_per_dollar": need_addressed_per_cost(need, cost["total_usd"])})
     out = [x for x in out if x["need_per_dollar"] is not None]
     out.sort(key=lambda x: x["need_per_dollar"], reverse=True)
+    best = out[0]["need_per_dollar"] if out else 0
     for i, x in enumerate(out, 1):
         x["opt_rank"] = i
+        x["impact_score"] = round(100 * x["need_per_dollar"] / best) if best else 0   # 0–100, best=100
     return {
         "capability": capability, "state": state, "origin": origin,
         "team_size": team_size, "days": days, "auto_days": auto_days,
         "demand_available": bool(rows and rows[0].get("demand_available")),
         "demand_note": (rows[0].get("demand_note") if rows else None),
+        "excluded_data_gaps": excluded,
         "districts": out[:top_n] if top_n else out,
     }
 
