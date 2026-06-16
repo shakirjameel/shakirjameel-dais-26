@@ -291,6 +291,7 @@ function selectState(state){
   if(state==='all'){
     markers.classed('dimmed',false).style('pointer-events','all');
     d3.selectAll('.map-state').classed('dimmed',false).classed('highlighted',false);
+    d3.select('.map-outline').style('opacity',1);
     recolorStates();
     return;
   }
@@ -302,11 +303,13 @@ function selectState(state){
     var n=(feat.properties.NAME_1||feat.properties.name||'').toLowerCase();
     if(n.includes(stateLC)||stateLC.includes(n))d3.select(this).classed('dimmed',false).classed('highlighted',true);
   });
+  d3.select('.map-outline').style('opacity',0.2);
 }
 
 function resetMapView(){
   markers.classed('dimmed',false).style('pointer-events','all');
   d3.selectAll('.map-state').classed('dimmed',false).classed('highlighted',false);
+  d3.select('.map-outline').style('opacity',1);
   document.getElementById('stateSelect').value='all';currentState='all';
   recolorStates();
 }
