@@ -152,6 +152,15 @@ def test_origin_distance_varies_by_base():
     assert haversine_km(28.6, 77.2, 25.6, 85.1) > 700
     assert haversine_km(25.6, 85.1, 25.6, 85.1) < 1
 
+def test_optimizer_excludes_no_data_and_unroutable_districts():
+    res = optimize("maternity", state=None, origin="Patna (Bihar)", top_n=8)
+    assert res["excluded_data_gaps"] > 0
+    for d in res["districts"]:
+        assert d["total_facilities"] > 0          # never recommend a district we have no data on
+        assert d["distance_km"] is not None       # never recommend one we can't route to
+        assert 0 <= d["impact_score"] <= 100
+    assert res["districts"][0]["impact_score"] == 100   # best = 100
+
 def test_optimizer_origin_changes_cost_and_is_state_scoped():
     from_delhi = optimize("maternity", state="Bihar", origin="Delhi", top_n=5)["districts"]
     from_patna = optimize("maternity", state="Bihar", origin="Patna (Bihar)", top_n=5)["districts"]

@@ -23,7 +23,19 @@ from mission_core import data_access as da
 from mission_core.claims import CAPABILITY_LABELS, CAPABILITIES
 from mission_core.coverage import DESERT_SHADE_THRESHOLDS
 from mission_core.coverage_view import coverage_by_geography, coverage_summary, state_rollup, optimize
-from mission_core.geo_names import from_topo_state, list_origins, DEFAULT_ORIGIN
+from mission_core.geo_names import from_topo_state, to_topo_state, list_origins, DEFAULT_ORIGIN
+
+
+def _disp_state(name):
+    """Canonical, correctly-spelled state name for display (internal NFHS spelling -> topology name)."""
+    return to_topo_state(name) or name
+
+
+def _need_band(score):
+    """Plain-language band for a 0–1 demand score (the raw number stays in tooltips)."""
+    if score is None:
+        return "not measured"
+    return "High" if score > 0.5 else "Medium" if score >= 0.34 else "Low"
 from agent import tools as T
 
 STATE_ALL = "India — all states"
@@ -145,12 +157,31 @@ def _legend():
     return f'<div class="muted" style="margin-top:6px">{chips}</div>'
 
 
+_LEGEND_HELP = {
+    "strong": "Verified facilities provide this care, and coverage looks good.",
+    "moderate": "Verified facilities provide this care; coverage is middling.",
+    "weaker": "Some verified care exists, but it's thin relative to the need.",
+    "claim_only": "Facilities here CLAIM this care, but their own records don't back it up — verify before relying on it.",
+    "no_claim_desert": "Facilities exist here, but NONE provides this care — a real care gap.",
+    "no_data": "We have no facility records here at all — unknown, not zero. Never counted as 'covered'.",
+}
+
+
+def _legend_with_help():
+    st.markdown(_legend(), unsafe_allow_html=True)
+    with st.popover("ⓘ What these colours mean"):
+        for c in ["strong", "moderate", "weaker", "claim_only", "no_claim_desert", "no_data"]:
+            st.markdown(f'<span class="swatch" style="background:{CAT_COLOR[c]}"></span> '
+                        f'**{CAT_LABEL[c]}** — {_LEGEND_HELP[c]}', unsafe_allow_html=True)
+
+
 def india_figure(roll):
     n = len(CAT_ORDER)
     scale = []
     for i, cat in enumerate(CAT_ORDER):
         scale += [[i / n, CAT_COLOR[cat]], [(i + 1) / n, CAT_COLOR[cat]]]
-    cust = [[r["our_state"] or r["st_nm"], CAT_LABEL[r["fill_category"]],
+    # hover shows the CANONICAL state name (st_nm) — matches the polygon; our_state is an internal key
+    cust = [[r["st_nm"], CAT_LABEL[r["fill_category"]],
              r["verified_facilities"], r["n_districts"]] for r in roll]
     ch = go.Choropleth(
         geojson=_GEOJSON, featureidkey="properties.st_nm",
@@ -282,9 +313,19 @@ active_state = None if state_select == STATE_ALL else topo2our.get(state_select)
 # ----------------------------------------------------------------------------- intro line (rendered per view; title is in the nav bar)
 def intro():
     st.markdown(
-        f'<div class="hero"><p>Trust-weighted facility coverage for {_pill("pill-cap", cap_label)} across India — '
-        'telling real care deserts apart from data-poor regions. Every facility claim is graded against its own '
-        'text and cited with a source.</p></div>', unsafe_allow_html=True)
+        f'<div class="hero"><p>Where is {_pill("pill-cap", cap_label)} care genuinely missing across India — '
+        'and can you trust what the data claims? We tell <b>real care deserts</b> apart from <b>data gaps</b>, '
+        'grade every facility’s claim against its own evidence, and show where a volunteer team does the most '
+        'good per dollar.</p></div>', unsafe_allow_html=True)
+    with st.popover("ⓘ How this works"):
+        st.markdown(
+            "**1 · Find the real gaps.** We map trust-weighted coverage and separate a *real care desert* "
+            "(facilities exist, none provides this care) from *no data yet* (we have no records — unknown, not zero).\n\n"
+            "**2 · Trust, not claims.** The data is web-scraped. We grade each facility’s claimed capability "
+            "against its *own* procedure/equipment text, cite it with a source, and label what’s unverified.\n\n"
+            "**3 · Act on it.** The Deployment Optimizer matches your team (capability, size, home base) to the "
+            "highest-need, best-value districts — measured demand × unmet gap ÷ cost from your base.\n\n"
+            "*Every number traces to a source or a named, adjustable assumption; nothing is fabricated.*")
 
 # ============================================================================= INDIA view
 if active_state is None:
@@ -297,7 +338,7 @@ if active_state is None:
     with left:
         ev = st.plotly_chart(india_figure(roll), key="india_map", on_select="rerun",
                              config={"displayModeBar": False}, width="stretch")
-        st.markdown(_legend(), unsafe_allow_html=True)
+        _legend_with_help()
         pts = (ev or {}).get("selection", {}).get("points", []) if ev else []
         if pts:
             clicked = pts[0].get("location")
@@ -340,7 +381,7 @@ else:
         st.markdown(f'<div class="muted" style="margin-top:8px">{summ["districts"]} districts · '
                     f'{summ["verified_facilities"]} text-verified facilities for {cap_label}.</div>',
                     unsafe_allow_html=True)
-        st.markdown(_legend(), unsafe_allow_html=True)
+        _legend_with_help()
 
     # district table — tick a row's Review checkbox to open its records; every column filter/sortable
     st.markdown("#### Districts")
@@ -398,22 +439,26 @@ else:
         dft = pd.DataFrame([{
             "Review": False, "District": r["district"],
             "Coverage": f'{CAT_DOT[_district_cat(r)]} {CAT_LABEL[_district_cat(r)]}',
-            "Verified": r["verified_supply"], "Unverified": r["unverified"],
-            "Facilities": r["total_facilities"], "Trust ratio": r["trust_ratio"],
-            "Desert score": r["desert_score"],
+            "Verified facilities": r["verified_supply"], "Unverified claims": r["unverified"],
+            "Total facilities": r["total_facilities"],
+            "Verified share": r["trust_ratio"] * 100 if r["trust_ratio"] is not None else float("nan"),
+            "Care-gap score": r["desert_score"],
         } for r in frows])
-        # key embeds state+capability+filter signature so checkbox state resets when the rows change
+        ro_cols = ["District", "Coverage", "Verified facilities", "Unverified claims",
+                   "Total facilities", "Verified share", "Care-gap score"]
         fsig = abs(hash(f"{f_district}|{tuple(sorted(f_cov))}|{rng_v}|{rng_u}|{rng_f}|{rng_t}|{rng_d}|{len(frows)}"))
         dkey = f"deditor_{state_select}_{capability}_{fsig}"
         tbl_h = min(600, (len(dft) + 1) * 35 + 3)   # size to rows (~35px each + header); cap → scroll
         edited = st.data_editor(
-            dft, key=dkey, hide_index=True, width="stretch", height=tbl_h,
-            disabled=["District", "Coverage", "Verified", "Unverified", "Facilities",
-                      "Trust ratio", "Desert score"],
+            dft, key=dkey, hide_index=True, width="stretch", height=tbl_h, disabled=ro_cols,
             column_config={
-                "Review": st.column_config.CheckboxColumn("Review", help="Open this district's records", width="small"),
-                "Trust ratio": st.column_config.NumberColumn("Trust ratio", format="%.2f"),
-                "Desert score": st.column_config.NumberColumn("Desert score", format="%.4f"),
+                "Review": st.column_config.CheckboxColumn("Review", help="Tick to open this district's facility records below.", width="small"),
+                "Coverage": st.column_config.TextColumn("Coverage", help="🟢 verified coverage · 🟡 claims only (unverified) · 🔴 no-claim desert (real gap) · ⚪ no data yet (unknown)."),
+                "Verified facilities": st.column_config.NumberColumn("Verified facilities", help="Facilities whose claimed capability is backed by their own procedure/equipment text."),
+                "Unverified claims": st.column_config.NumberColumn("Unverified claims", help="Facilities that assert the capability but whose own text doesn't back it up."),
+                "Total facilities": st.column_config.NumberColumn("Total facilities", help="All facilities we resolved in this district (any capability)."),
+                "Verified share": st.column_config.NumberColumn("Verified share", format="%.0f%%", help="Of facilities that claim this capability, the share that are text-verified. Blank when none claim it."),
+                "Care-gap score": st.column_config.NumberColumn("Care-gap score", format="%.2f", help="0–1, higher = bigger unmet need: patient demand × low verified supply."),
             })
         checked = edited.loc[edited["Review"], "District"].tolist() if len(edited) else []
         prev = ss.get("_prev_review", [])
@@ -530,28 +575,38 @@ with tab_opt:
         st.info("No districts to rank for this selection.")
     else:
         top = ds[0]
+        origin_short = origin.split(" (")[0]
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Top pick", f"{top['district']}, {top['state']}")
-        m2.metric("Need addressed / $", f"{top['need_per_dollar']:.2e}")
-        m3.metric(f"Est. cost (from {origin.split(' (')[0]})", f"${top['cost_total_usd']:,.0f}")
-        m4.metric("Days to meet demand", top["days_to_meet_demand"] or "—")
-        st.markdown(_legend(), unsafe_allow_html=True)
+        m1.metric("Top pick", f"{top['district']}, {_disp_state(top['state'])}")
+        m2.metric("Impact score", top["impact_score"],
+                  help="0–100, best option = 100. Under the hood: patient need addressed per dollar "
+                       f"(need ÷ mission cost); raw value for the top pick is {top['need_per_dollar']:.2e}.")
+        m3.metric(f"Est. cost (from {origin_short})", f"${top['cost_total_usd']:,.0f}",
+                  help="Travel from your home base (round-trip) + lodging/food per volunteer per day + "
+                       "the value of operating days lost to travel. All coefficients are adjustable.")
+        m4.metric("Days to meet demand", top["days_to_meet_demand"] or "—",
+                  help="How long this team would need to clear the district's estimated patient backlog "
+                       "at the chosen patients-per-volunteer-per-day. Fewer volunteers ⇒ more days.")
+        if res.get("excluded_data_gaps"):
+            st.caption(f"ℹ️ {res['excluded_data_gaps']} districts excluded from this ranking because we have "
+                       "no facility records (or no route estimate) for them — they appear on the desert map "
+                       "above as **No data yet** / gaps to investigate, not as deployment targets.")
+        _legend_with_help()
         for r in ds:
             cat = _district_cat(r)
             cls = "pill-hi" if cat in ("strong", "moderate", "weaker") else "pill-med" if cat == "claim_only" else "pill-lo"
-            dist = f'{r["distance_km"]}km ({r["travel_source"]})' if r["distance_km"] is not None else "distance n/a"
-            dem = (f'demand {r["burden"]}' if r["demand_available"] else "supply-scarcity (no demand indicator)")
+            distlbl = f'~{r["distance_km"]:,.0f} km from {origin_short}' if r["distance_km"] is not None else "no road estimate"
+            need = (f'Patient need: <b>{_need_band(r["burden"])}</b>' if r["demand_available"]
+                    else "Patient need: <i>not measured — ranked by scarcity</i>")
             av = f' · 🤝 {r["accepts_volunteers"]} accept volunteers' if r["accepts_volunteers"] else ""
-            beds = f' · {r["verified_beds"]} verified beds' if r.get("verified_beds") else ""
+            tip = (f'demand score {r["burden"]} · need/$ {r["need_per_dollar"]:.2e} · '
+                   f'{r["travel_source"]}') if r["demand_available"] else f'{r["travel_source"]}'
             st.markdown(
-                f'<div class="card"><b>#{r["opt_rank"]} {r["district"]}, {r["state"]}</b> &nbsp;'
-                f'{_pill(cls, CAT_LABEL[cat])}'
-                f'<br><span class="muted">{dem} · verified supply {r["verified_supply"]}{beds} · '
-                f'{dist} · ${r["cost_total_usd"]:,.0f} · need/$ {r["need_per_dollar"]:.2e} · '
-                f'~{r["days_to_meet_demand"]}d to meet demand{av}</span></div>', unsafe_allow_html=True)
-        st.caption("Cost coefficients (per-km, per-diem, surgeon-day, patients/volunteer/day, need-units) "
-                   "are named, adjustable assumptions — need is RELATIVE (the source data has no population "
-                   "denominator), shown honestly, never a fabricated absolute count.")
+                f'<div class="card" title="{tip}"><b>#{r["opt_rank"]} {r["district"]}, {_disp_state(r["state"])}</b> '
+                f'&nbsp;{_pill("pill-hi", "impact " + str(r["impact_score"]))} {_pill(cls, CAT_LABEL[cat])}'
+                f'<br><span class="muted">{need} · {r["verified_supply"]} verified facilities · '
+                f'{distlbl} · est ${r["cost_total_usd"]:,.0f} · ~{r["days_to_meet_demand"]} days to meet '
+                f'demand{av}</span></div>', unsafe_allow_html=True)
 
 with tab_workspace:
     st.caption("Everything you save — shortlist, review decisions, notes, scenarios — persisted across "
