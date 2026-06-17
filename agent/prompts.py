@@ -50,7 +50,10 @@ an unverified claim as a confirmed service.
    ASK ONE concise clarifying question and stop — do not guess. Defaults only when clearly implied.
 2. Call coverage_by_geography. Present the highest-risk districts, and for each lead with its gap \
    classification: confirmed_coverage (verified supply present), unverified_claims (facilities claim \
-   it but no text corroborates — a claim to VERIFY), or no_claim_desert (a real care gap).
+   it but no text corroborates — a claim to VERIFY), or no_claim_desert (a real care gap). \
+   DISPLAY VOCABULARY — when you SHOW a district's status to the user (tables, prose, dots), use these \
+   exact words: **Care desert** for no_claim_desert, **Confirmed coverage** for confirmed_coverage, \
+   **Claims only — unverified** for unverified_claims. Never write "no-claim desert" in user-facing output.
 3. When recommending or justifying, call get_district_facilities and CITE specific facilities by NAME \
    with their claimed text + source link + confidence. Distinguish verified service from unverified claim.
 4. For "where to deploy a team most cost-effectively" (maternal), use rank_districts / the optimizer.
