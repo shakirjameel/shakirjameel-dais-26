@@ -132,10 +132,6 @@ st.markdown(f"""
     --bg:#F9F7F4; --surface:#ffffff; --border:#e7e4dd; --ink:#0B2026; --muted:#5b6770;
     --accent:{ACCENT}; --chip:#eef2f4; --nodata:#D3D1C7;
   }}
-  @media (prefers-color-scheme: dark) {{
-    :root {{ --bg:#0d1117; --surface:#161b22; --border:#2a313c; --ink:#e6edf3; --muted:#9aa4b2;
-             --chip:#1f2630; --nodata:#3d3c37; }}
-  }}
   .stApp {{ background: var(--bg); }}
   html, body, [class*="css"] {{ font-family: -apple-system, "Segoe UI", Roboto, sans-serif; }}
   h1,h2,h3 {{ color: var(--ink); font-weight:500; letter-spacing:-0.01em; }}
@@ -740,7 +736,10 @@ else:
                         + (f'<br><b>claims:</b> “{cap_ev}”' if cap_ev else
                            '<br><b>claims:</b> <i>flag/specialty asserts it, but the facility’s own text doesn’t — unverified</i>')
                         + (f'<br><b>corroborated by:</b> “{proc_ev}”' if proc_ev else
-                           ('<br><span class="muted">not corroborated by procedure/equipment text</span>' if cap_ev else ''))
+                           (('<br><span class="muted">procedure/equipment text present but does not mention the service — not corroborated</span>'
+                             if str(c.get("corroboration_available") or "0") in ("1", "1.0")
+                             else '<br><span class="muted">no procedure/equipment text available to corroborate — undocumented, not disproven</span>')
+                            if cap_ev else ''))
                         + '</div>', unsafe_allow_html=True)
                 st.caption("Each line is the facility's own extracted text — cited with its source link, "
                            "plus contact + whether it accepts volunteers (an actionable partner list).")
